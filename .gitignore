@@ -1,0 +1,19 @@
+# Project exclude paths
+.gradle/
+build/
+
+# IDE files
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Generated files
+out/
+libs/
+
+# Other
+.DS_Store
+*.log
+*.tmp
+.claude/
