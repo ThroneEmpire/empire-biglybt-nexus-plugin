@@ -1,19 +1,21 @@
-# Nexus — qBittorrent / Transmission API Bridge for BiglyBT
+# Nexus — qBittorrent & Transmission API Bridge for BiglyBT
 
-A BiglyBT plugin that provides a qBittorrent and Transmission compatible API. This allows you to use web UIs and remote clients like VueTorrent, qBittorrent-Web, Flood, and Tremotesf with BiglyBT.
+**Nexus** is a high-performance plugin for BiglyBT that acts as a translation layer, exposing a **qBittorrent-compatible Web API** and **Transmission RPC**.
+
+This allows you to use modern, beautiful Web UIs like **VueTorrent**, **Flood**, or **Transmission Remote GUI** while keeping the advanced features and power of the BiglyBT engine.
 
 ## Building
 
 1.  **Get BiglyBT.jar:** Copy `BiglyBT.jar` from your BiglyBT installation directory into the `libs/` folder of this project.
 2.  **Build the plugin:** Run the following command in the project root:
     ```sh
-    ./gradlew shadowJar
+    ./gradlew build
     ```
-    This will create the plugin JAR file in `build/libs/nexus.jar`.
+    This will create the plugin JAR file in `build/libs/Nexus_VERSION.jar`.
 
 ## Installation
 
-1.  Copy the generated `nexus.jar` from `build/libs/` into your BiglyBT plugins directory. The location varies by operating system, but is typically in a `.biglybt/plugins/` folder in your user's home directory.
+1.  Copy the generated `Nexus_Version.jar` from `build/libs/` and go select the jar in Tools -> Plugins -> Install from file.
 2.  Restart BiglyBT.
 
 ## Configuration

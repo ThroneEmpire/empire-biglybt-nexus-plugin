@@ -31,21 +31,15 @@ public class NexusPlugin implements Plugin {
     private NexusServer server;
 
     @Override
-    public void initialize(PluginInterface pi) throws PluginException {
+    public void initialize(PluginInterface pluginInterface) throws PluginException {
+        LoggerChannel log = pluginInterface.getLogger().getChannel("Nexus");
+        pluginInterface.getPluginProperties().setProperty("plugin.name", "Nexus");
 
-        LoggerChannel log = pi.getLogger().getChannel("Nexus");
-
-        pi.getPluginProperties().setProperty("plugin.name", "Nexus");
-
-        // ── Settings UI ───────────────────────────────────────────────────────
-        // createBasicPluginConfigModel() registers a section under
-        // BiglyBT → Tools → Options → Plugins → Nexus.
-        // The string key is a parent section; "Nexus" is the child label.
-        BasicPluginConfigModel config = pi.getUIManager()
+        // Settings UI
+        BasicPluginConfigModel config = pluginInterface.getUIManager()
                 .createBasicPluginConfigModel("plugins", "nexus.section");
 
         config.addLabelParameter2("nexus.description");
-
         IntParameter portParam = config.addIntParameter2(
                 "nexus.http.port", "nexus.http.port", 8090);
         BooleanParameter bypassParam = config.addBooleanParameter2(
@@ -53,20 +47,20 @@ public class NexusPlugin implements Plugin {
         DirectoryParameter webuiParam = config.addDirectoryParameter2(
                 "nexus.webui.path", "nexus.webui.path", "");
 
-        // ── Read current values ───────────────────────────────────────────────
+        // Read current values
         int port = portParam.getValue();
         boolean bypass = bypassParam.getValue();
         String webuiPath = webuiParam.getValue();
 
-        // ── Start server ──────────────────────────────────────────────────────
-        server = new NexusServer(port, bypass, webuiPath, pi);
+        // Start Server
+        server = new NexusServer(port, bypass, webuiPath, pluginInterface);
         try {
             server.start();
         } catch (Exception e) {
             throw new PluginException("Nexus: failed to start HTTP server on port " + port, e);
         }
 
-        // ── Clickable URL in the settings page ────────────────────────────────
+        // ── Clickable URL
         HyperlinkParameter urlParam = config.addHyperlinkParameter2(
                 "nexus.server.url", "http://localhost:" + port);
         urlParam.setHyperlink("http://localhost:" + port);

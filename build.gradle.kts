@@ -16,12 +16,10 @@ repositories {
 }
 
 dependencies {
-    // BiglyBT plugin API - copy BiglyBT.jar from your BiglyBT installation
-    // into libs/ before building.
+    // BiglyBT API (BiglyBT.jar)
     compileOnly(fileTree("libs") { include("*.jar") })
 
-    // Bundled into the shaded plugin JAR.
-    implementation("com.google.code.gson:gson:2.10.1")
+    implementation("com.google.code.gson:gson:2.13.2")
 }
 
 tasks {
@@ -33,30 +31,15 @@ tasks {
         options.release.set(21)
     }
 
-    // BiglyBT should load the shaded JAR as the plugin artifact.
+    // We do not want an unshaded jar also.
     jar {
         enabled = false
     }
 
     shadowJar {
-        archiveBaseName.set("nexus")
+        archiveBaseName.set("Nexus_" + version.toString().split(".")[0])
         archiveClassifier.set("")
         archiveVersion.set("")
         duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     }
-}
-
-// Convenience task: copy the built JAR into BiglyBT's plugins directory.
-// Override with: ./gradlew deployPlugin -PbiglybtPlugins=/your/path
-val biglybtPlugins: String by extra {
-    findProperty("biglybtPlugins")?.toString()
-        ?: "${System.getProperty("user.home")}/.biglybt/plugins/nexus"
-}
-
-tasks.register<Copy>("deployPlugin") {
-    dependsOn(tasks.shadowJar)
-    from(tasks.shadowJar.get().archiveFile)
-    into(biglybtPlugins)
-    doFirst { mkdir(biglybtPlugins) }
-    doLast { println("Deployed -> $biglybtPlugins") }
 }
