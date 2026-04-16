@@ -18,17 +18,18 @@ import java.net.URL;
 import java.util.*;
 
 /**
- * Implements Transmission RPC torrent-* methods and free-space / queue-move.
+ * Implements Transmission RPC torrent-* methods for the modern Transmission 4.x web UI.
  *
- * Torrent IDs are derived from the first 4 bytes of the info-hash (sign bit
- * cleared), giving stable integer IDs that are consistent across polls without
- * requiring any state storage.
+ * All request field names use snake_case (as sent by the web UI).
+ * All response field names use snake_case (as expected by the web UI).
+ *
+ * torrent-get always returns table format:
+ *   torrents: [ [key1, key2, ...], [val1, val2, ...], ... ]
  */
 class TrTorrentMethods {
 
     private final PluginInterface pi;
 
-    // Transmission status codes
     private static final int TR_STATUS_STOPPED       = 0;
     private static final int TR_STATUS_CHECK_WAIT    = 1;
     private static final int TR_STATUS_CHECK         = 2;
@@ -36,6 +37,9 @@ class TrTorrentMethods {
     private static final int TR_STATUS_DOWNLOAD      = 4;
     private static final int TR_STATUS_SEED_WAIT     = 5;
     private static final int TR_STATUS_SEED          = 6;
+
+    /** IDs removed since last torrent-get; cleared after each torrent-get response. */
+    private final Set<Integer> recentlyRemovedIds = Collections.synchronizedSet(new HashSet<>());
 
     TrTorrentMethods(PluginInterface pi) {
         this.pi = pi;
@@ -49,10 +53,9 @@ class TrTorrentMethods {
         if (args.has("ids")) {
             JsonElement idsEl = args.get("ids");
             if (idsEl.isJsonPrimitive()) {
-                // "recently-active" → return all (we don't track deltas)
-                // Any integer string → single torrent
                 String s = idsEl.getAsString();
-                if (!"recently-active".equals(s)) {
+                boolean isRecentlyActive = "recently-active".equals(s) || "recently_active".equals(s);
+                if (!isRecentlyActive) {
                     try {
                         requestedIds = new HashSet<>();
                         requestedIds.add(Integer.parseInt(s));
@@ -66,55 +69,60 @@ class TrTorrentMethods {
                         try { requestedIds.add(e.getAsInt()); } catch (Exception ignored) {}
                     }
                 }
-                // empty array → no filter (return all)
             }
         }
 
-        // Parse requested fields — normalize underscore_case → camelCase
-        Set<String> fields;
+        // Parse requested fields (web UI always sends these in snake_case)
+        List<String> fieldList;
         if (args.has("fields")) {
-            fields = new LinkedHashSet<>();
-            for (JsonElement e : args.getAsJsonArray("fields")) fields.add(underscoreToCamel(e.getAsString()));
+            fieldList = new ArrayList<>();
+            for (JsonElement e : args.getAsJsonArray("fields")) fieldList.add(e.getAsString());
         } else {
-            fields = Set.of("id", "name", "status", "percentDone",
-                    "rateDownload", "rateUpload", "eta",
-                    "totalSize", "haveValid", "leftUntilDone", "downloadDir");
+            fieldList = List.of("id", "name", "status", "percent_done",
+                    "rate_download", "rate_upload", "eta",
+                    "total_size", "have_valid", "left_until_done", "download_dir");
         }
 
-        boolean tableFormat = args.has("format")
-                && "table".equals(args.get("format").getAsString());
+        boolean tableFormat = !args.has("format") || "table".equals(args.get("format").getAsString());
 
-        // Build torrent list
-        JsonArray torrents = new JsonArray();
+        // Build per-torrent objects
+        List<JsonObject> torrentObjects = new ArrayList<>();
         for (Download dl : pi.getDownloadManager().getDownloads()) {
-            if (dl.getTorrent() == null) continue;
+            if (!TorrentMapper.isUserDownload(dl)) continue;
             int id = torrentId(dl);
             if (requestedIds != null && !requestedIds.contains(id)) continue;
-            torrents.add(buildTorrentFields(dl, id, fields));
+            torrentObjects.add(buildTorrentFields(dl, id, fieldList));
         }
 
         JsonObject a = new JsonObject();
         if (tableFormat) {
-            // Table format: separate keys array + rows as arrays
-            List<String> keyList = new ArrayList<>(fields);
+            // Table format: first element is keys array, remaining are data row arrays.
+            // Parsed by web UI as: keys = table.shift(); for (row of table) map keys[i]->row[i]
+            JsonArray table = new JsonArray();
             JsonArray keys = new JsonArray();
-            keyList.forEach(keys::add);
-            JsonArray rows = new JsonArray();
-            for (JsonElement te : torrents) {
-                JsonObject obj = te.getAsJsonObject();
+            fieldList.forEach(keys::add);
+            table.add(keys);
+            for (JsonObject obj : torrentObjects) {
                 JsonArray row = new JsonArray();
-                for (String k : keyList) row.add(obj.has(k) ? obj.get(k) : JsonNull.INSTANCE);
-                rows.add(row);
+                for (String k : fieldList) row.add(obj.has(k) ? obj.get(k) : JsonNull.INSTANCE);
+                table.add(row);
             }
-            a.add("torrents", rows);
+            a.add("torrents", table);
         } else {
-            a.add("torrents", torrents);
+            JsonArray arr = new JsonArray();
+            torrentObjects.forEach(arr::add);
+            a.add("torrents", arr);
         }
-        a.add("removed", new JsonArray());
+        JsonArray removed = new JsonArray();
+        synchronized (recentlyRemovedIds) {
+            recentlyRemovedIds.forEach(removed::add);
+            recentlyRemovedIds.clear();
+        }
+        a.add("removed", removed);
         return TransmissionRouter.success(a);
     }
 
-    private JsonObject buildTorrentFields(Download dl, int id, Set<String> fields) {
+    private JsonObject buildTorrentFields(Download dl, int id, List<String> fields) {
         Torrent       torrent = dl.getTorrent();
         DownloadStats stats   = dl.getStats();
         JsonObject    t       = new JsonObject();
@@ -129,126 +137,103 @@ class TrTorrentMethods {
                           DownloadStats stats, int id) {
         switch (f) {
             // ── Identity ──────────────────────────────────────────────────────
-            case "id"         -> t.addProperty("id", id);
-            case "hashString" -> t.addProperty("hashString", TorrentMapper.hashHex(torrent.getHash()));
-            case "name"       -> t.addProperty("name", torrent.getName());
+            case "id"          -> t.addProperty("id", id);
+            case "hash_string" -> t.addProperty("hash_string", TorrentMapper.hashHex(torrent.getHash()));
+            case "name"        -> t.addProperty("name", torrent.getName());
 
             // ── Status / error ────────────────────────────────────────────────
-            case "status"      -> t.addProperty("status", toTrStatus(dl));
-            case "error"       -> t.addProperty("error", dl.getState() == Download.ST_ERROR ? 3 : 0);
-            case "errorString" -> t.addProperty("errorString", dl.getState() == Download.ST_ERROR ? "Error" : "");
-            case "isStalled"   -> t.addProperty("isStalled", isStalled(dl, stats));
-            case "isFinished"  -> t.addProperty("isFinished", stats.getCompleted() >= 1000);
-            case "isPrivate"   -> { boolean p = false; try { p = torrent.isPrivate(); } catch (Exception ignored) {} t.addProperty("isPrivate", p); }
+            case "status"       -> t.addProperty("status", toTrStatus(dl));
+            case "error"        -> t.addProperty("error", dl.getState() == Download.ST_ERROR ? 3 : 0);
+            case "error_string" -> t.addProperty("error_string", dl.getState() == Download.ST_ERROR ? "Error" : "");
+            case "is_stalled"   -> t.addProperty("is_stalled", isStalled(dl, stats));
+            case "is_finished"  -> t.addProperty("is_finished", stats.getCompleted() >= 1000);
+            case "is_private"   -> { boolean p = false; try { p = torrent.isPrivate(); } catch (Exception ignored) {} t.addProperty("is_private", p); }
 
             // ── Sizes / progress ──────────────────────────────────────────────
-            case "totalSize"               -> t.addProperty("totalSize", torrent.getSize());
-            case "sizeWhenDone"            -> t.addProperty("sizeWhenDone", torrent.getSize());
-            case "haveValid"               -> t.addProperty("haveValid", (long)(torrent.getSize() * stats.getCompleted() / 1000.0));
-            case "haveUnchecked"           -> t.addProperty("haveUnchecked", 0L);
-            case "leftUntilDone"           -> { long left = torrent.getSize() - (long)(torrent.getSize() * stats.getCompleted() / 1000.0); t.addProperty("leftUntilDone", Math.max(0L, left)); }
-            case "desiredAvailable"        -> { long left = torrent.getSize() - (long)(torrent.getSize() * stats.getCompleted() / 1000.0); t.addProperty("desiredAvailable", Math.max(0L, left)); }
-            case "percentDone"             -> t.addProperty("percentDone", stats.getCompleted() / 1000.0);
-            case "recheckProgress"         -> t.addProperty("recheckProgress", 0.0);
-            case "metadataPercentComplete" -> t.addProperty("metadataPercentComplete", 1.0);
+            case "total_size"                -> t.addProperty("total_size", torrent.getSize());
+            case "size_when_done"            -> t.addProperty("size_when_done", torrent.getSize());
+            case "have_valid"                -> t.addProperty("have_valid", (long)(torrent.getSize() * stats.getCompleted() / 1000.0));
+            case "have_unchecked"            -> t.addProperty("have_unchecked", 0L);
+            case "left_until_done"           -> { long left = torrent.getSize() - (long)(torrent.getSize() * stats.getCompleted() / 1000.0); t.addProperty("left_until_done", Math.max(0L, left)); }
+            case "desired_available"         -> { long left = torrent.getSize() - (long)(torrent.getSize() * stats.getCompleted() / 1000.0); t.addProperty("desired_available", Math.max(0L, left)); }
+            case "percent_done"              -> t.addProperty("percent_done", stats.getCompleted() / 1000.0);
+            case "recheck_progress"          -> t.addProperty("recheck_progress", 0.0);
+            case "metadata_percent_complete" -> t.addProperty("metadata_percent_complete", 1.0);
+            case "file_count"                -> { int fc = 0; try { DiskManagerFileInfo[] fi = dl.getDiskManagerFileInfo(); fc = fi != null ? fi.length : 0; } catch (Exception ignored) {} t.addProperty("file_count", fc); }
+            case "primary_mime_type"         -> t.addProperty("primary_mime_type", "application/x-bittorrent");
 
             // ── Speeds / transfer ─────────────────────────────────────────────
-            case "rateDownload"       -> t.addProperty("rateDownload", stats.getDownloadAverage());
-            case "rateUpload"         -> t.addProperty("rateUpload", stats.getUploadAverage());
-            case "uploadedEver"       -> t.addProperty("uploadedEver", stats.getUploaded(false));
-            case "downloadedEver"     -> t.addProperty("downloadedEver", stats.getDownloaded(false));
-            case "corruptEver"        -> t.addProperty("corruptEver", 0L);
-            case "swarmSpeed"         -> t.addProperty("swarmSpeed", (long)(stats.getDownloadAverage() + stats.getUploadAverage()));
-            case "uploadedEverSession"   -> { long u = 0; try { u = stats.getUploaded(true);   } catch (Exception ignored) {} t.addProperty("uploadedEverSession",   u); }
-            case "downloadedEverSession" -> { long d = 0; try { d = stats.getDownloaded(true); } catch (Exception ignored) {} t.addProperty("downloadedEverSession", d); }
-            case "corruptEverSession"    -> t.addProperty("corruptEverSession", 0L);
-            case "uploadRatio"        -> {
-                long dl2 = stats.getDownloaded(false), ul = stats.getUploaded(false);
-                t.addProperty("uploadRatio", dl2 > 0 ? (double) ul / dl2 : (ul > 0 ? -2.0 : -1.0));
+            case "rate_download"    -> t.addProperty("rate_download", stats.getDownloadAverage());
+            case "rate_upload"      -> t.addProperty("rate_upload", stats.getUploadAverage());
+            case "uploaded_ever"    -> t.addProperty("uploaded_ever", stats.getUploaded(false));
+            case "downloaded_ever"  -> t.addProperty("downloaded_ever", stats.getDownloaded(false));
+            case "corrupt_ever"     -> t.addProperty("corrupt_ever", 0L);
+            case "upload_ratio"     -> {
+                long downloaded = stats.getDownloaded(false), uploaded = stats.getUploaded(false);
+                t.addProperty("upload_ratio", downloaded > 0 ? (double) uploaded / downloaded : (uploaded > 0 ? -2.0 : -1.0));
             }
 
             // ── ETA ───────────────────────────────────────────────────────────
-            case "eta"     -> { long e = stats.getETASecs(); t.addProperty("eta", (e == Long.MAX_VALUE || e < 0) ? -1L : e); }
-            case "etaIdle" -> t.addProperty("etaIdle", -1L);
+            case "eta" -> { long e = stats.getETASecs(); t.addProperty("eta", (e == Long.MAX_VALUE || e < 0) ? -1L : e); }
 
             // ── Timestamps ───────────────────────────────────────────────────
-            case "addedDate"           -> { long ts = 0; try { ts = stats.getTimeStarted() / 1000L; } catch (Exception ignored) {} t.addProperty("addedDate", ts); }
-            case "activityDate"        -> t.addProperty("activityDate", System.currentTimeMillis() / 1000L);
-            case "doneDate"            -> t.addProperty("doneDate", stats.getCompleted() >= 1000 ? System.currentTimeMillis() / 1000L : 0L);
-            case "startDate"           -> { long ts = 0; try { ts = stats.getTimeStarted() / 1000L; } catch (Exception ignored) {} t.addProperty("startDate", ts); }
-            case "dateCreated"         -> { long dc = 0; try { dc = torrent.getCreationDate(); } catch (Exception ignored) {} t.addProperty("dateCreated", dc); }
-            case "secondsDownloading"  -> { long ts = 0; try { long st = stats.getTimeStarted(); if (st > 0) ts = (System.currentTimeMillis() - st) / 1000L; } catch (Exception ignored) {} t.addProperty("secondsDownloading", ts); }
-            case "secondsSeeding"      -> { long ss = 0; try { ss = stats.getSecondsOnlySeeding(); } catch (Exception ignored) {} t.addProperty("secondsSeeding", ss); }
-            case "manualAnnounceTime"  -> t.addProperty("manualAnnounceTime", 0L);
+            case "added_date"    -> { long ts = 0; try { ts = stats.getTimeStarted() / 1000L; } catch (Exception ignored) {} t.addProperty("added_date", ts); }
+            case "activity_date" -> t.addProperty("activity_date", System.currentTimeMillis() / 1000L);
+            case "start_date"    -> { long ts = 0; try { ts = stats.getTimeStarted() / 1000L; } catch (Exception ignored) {} t.addProperty("start_date", ts); }
+            case "date_created"  -> { long dc = 0; try { dc = torrent.getCreationDate(); } catch (Exception ignored) {} t.addProperty("date_created", dc); }
 
-            // ── Paths / links ─────────────────────────────────────────────────
-            case "downloadDir"  -> { String dir = ""; try { dir = stats.getDownloadDirectory(); } catch (Exception ignored) {} t.addProperty("downloadDir", dir != null ? dir : ""); }
+            // ── Paths ─────────────────────────────────────────────────────────
+            case "download_dir" -> { String dir = ""; try { dir = stats.getDownloadDirectory(); } catch (Exception ignored) {} t.addProperty("download_dir", dir != null ? dir : ""); }
             case "comment"      -> { String c = ""; try { c = torrent.getComment();   } catch (Exception ignored) {} t.addProperty("comment",  c != null ? c : ""); }
             case "creator"      -> { String c = ""; try { c = torrent.getCreatedBy(); } catch (Exception ignored) {} t.addProperty("creator",  c != null ? c : ""); }
-            case "magnetLink"   -> t.addProperty("magnetLink", "magnet:?xt=urn:btih:" + TorrentMapper.hashHex(torrent.getHash()) + "&dn=" + urlEncode(torrent.getName()));
+            case "magnet_link"  -> t.addProperty("magnet_link", "magnet:?xt=urn:btih:" + TorrentMapper.hashHex(torrent.getHash()) + "&dn=" + urlEncode(torrent.getName()));
 
             // ── Queue / priority ──────────────────────────────────────────────
-            case "queuePosition"      -> t.addProperty("queuePosition", dl.getPosition());
-            case "bandwidthPriority"  -> t.addProperty("bandwidthPriority", 0);
-            case "honorsSessionLimits"-> t.addProperty("honorsSessionLimits", true);
+            case "queue_position" -> t.addProperty("queue_position", dl.getPosition());
 
             // ── Per-torrent limits ────────────────────────────────────────────
-            case "downloadLimit"   -> { int lim = 0; try { lim = dl.getDownloadRateLimitBytesPerSecond() / 1024; } catch (Exception ignored) {} t.addProperty("downloadLimit", lim); }
-            case "downloadLimited" -> { boolean lim = false; try { lim = dl.getDownloadRateLimitBytesPerSecond() > 0; } catch (Exception ignored) {} t.addProperty("downloadLimited", lim); }
-            case "uploadLimit"     -> { int lim = 0; try { lim = dl.getUploadRateLimitBytesPerSecond() / 1024; } catch (Exception ignored) {} t.addProperty("uploadLimit", lim); }
-            case "uploadLimited"   -> { boolean lim = false; try { lim = dl.getUploadRateLimitBytesPerSecond() > 0; } catch (Exception ignored) {} t.addProperty("uploadLimited", lim); }
+            case "download_limit"   -> { int lim = 0; try { lim = dl.getDownloadRateLimitBytesPerSecond() / 1024; } catch (Exception ignored) {} t.addProperty("download_limit", lim); }
+            case "download_limited" -> { boolean lim = false; try { lim = dl.getDownloadRateLimitBytesPerSecond() > 0; } catch (Exception ignored) {} t.addProperty("download_limited", lim); }
+            case "upload_limit"     -> { int lim = 0; try { lim = dl.getUploadRateLimitBytesPerSecond() / 1024; } catch (Exception ignored) {} t.addProperty("upload_limit", lim); }
+            case "upload_limited"   -> { boolean lim = false; try { lim = dl.getUploadRateLimitBytesPerSecond() > 0; } catch (Exception ignored) {} t.addProperty("upload_limited", lim); }
 
             // ── Seeding rules ─────────────────────────────────────────────────
-            case "seedRatioMode"  -> t.addProperty("seedRatioMode", 0);
-            case "seedRatioLimit" -> t.addProperty("seedRatioLimit", 2.0);
-            case "seedIdleMode"   -> t.addProperty("seedIdleMode", 0);
-            case "seedIdleLimit"  -> t.addProperty("seedIdleLimit", 30);
+            case "seed_ratio_mode"  -> t.addProperty("seed_ratio_mode", 0);
+            case "seed_ratio_limit" -> t.addProperty("seed_ratio_limit", 2.0);
 
             // ── Peer counts ───────────────────────────────────────────────────
-            case "peersConnected"     -> { int c = 0; try { PeerManager pm = dl.getPeerManager(); if (pm != null) c = pm.getStats().getConnectedSeeds() + pm.getStats().getConnectedLeechers(); } catch (Exception ignored) {} t.addProperty("peersConnected", c); }
-            case "peersSendingToUs"   -> { int c = 0; try { PeerManager pm = dl.getPeerManager(); if (pm != null) c = pm.getStats().getConnectedSeeds();    } catch (Exception ignored) {} t.addProperty("peersSendingToUs",   c); }
-            case "peersGettingFromUs" -> { int c = 0; try { PeerManager pm = dl.getPeerManager(); if (pm != null) c = pm.getStats().getConnectedLeechers(); } catch (Exception ignored) {} t.addProperty("peersGettingFromUs", c); }
-            case "webseedsSendingToUs" -> t.addProperty("webseedsSendingToUs", 0);
-            case "peersFrom" -> {
-                JsonObject pf = new JsonObject();
-                pf.addProperty("fromCache",    0);
-                pf.addProperty("fromDht",      0);
-                pf.addProperty("fromIncoming", 0);
-                pf.addProperty("fromLpd",      0);
-                pf.addProperty("fromLtep",     0);
-                pf.addProperty("fromPex",      0);
-                pf.addProperty("fromTracker",  0);
-                t.add("peersFrom", pf);
-            }
+            case "peers_connected"      -> { int c = 0; try { PeerManager pm = dl.getPeerManager(); if (pm != null) c = pm.getStats().getConnectedSeeds() + pm.getStats().getConnectedLeechers(); } catch (Exception ignored) {} t.addProperty("peers_connected", c); }
+            case "peers_sending_to_us"  -> { int c = 0; try { PeerManager pm = dl.getPeerManager(); if (pm != null) c = pm.getStats().getConnectedSeeds();    } catch (Exception ignored) {} t.addProperty("peers_sending_to_us",  c); }
+            case "peers_getting_from_us"-> { int c = 0; try { PeerManager pm = dl.getPeerManager(); if (pm != null) c = pm.getStats().getConnectedLeechers(); } catch (Exception ignored) {} t.addProperty("peers_getting_from_us", c); }
+            case "webseeds_sending_to_us" -> t.addProperty("webseeds_sending_to_us", 0);
 
-            // ── Labels / trackers / files / peers (expensive — only fetch when asked) ─
-            case "labels"       -> t.add("labels",       buildLabels(dl));
-            case "trackers"     -> t.add("trackers",     buildTrackers(torrent));
-            case "trackerStats" -> t.add("trackerStats", buildTrackerStats(dl, torrent));
-            case "trackerList"  -> t.addProperty("trackerList", buildTrackerList(torrent));
-            case "files"        -> t.add("files",        buildFiles(dl, stats));
-            case "fileStats"    -> t.add("fileStats",    buildFileStats(dl));
-            case "priorities"   -> t.add("priorities",  buildPriorities(dl));
-            case "wanted"       -> t.add("wanted",       buildWanted(dl));
-            case "peers"        -> t.add("peers",        buildPeers(dl));
-            case "webseeds"     -> t.add("webseeds",     new JsonArray());
+            // ── Labels / trackers / files / peers ─────────────────────────────
+            case "labels"        -> t.add("labels",       buildLabels(dl));
+            case "trackers"      -> t.add("trackers",     buildTrackers(torrent));
+            case "tracker_stats" -> t.add("tracker_stats", buildTrackerStats(dl, torrent));
+            case "tracker_list"  -> t.addProperty("tracker_list", buildTrackerList(torrent));
+            case "files"         -> t.add("files",        buildFiles(dl, stats));
+            case "file_stats"    -> t.add("file_stats",   buildFileStats(dl));
+            case "peers"         -> t.add("peers",        buildPeers(dl));
+            case "webseeds"      -> t.add("webseeds",     new JsonArray());
+            case "webseeds_ex"   -> t.add("webseeds_ex",  new JsonArray());
 
             // ── Piece info ────────────────────────────────────────────────────
-            case "pieceCount" -> t.addProperty("pieceCount", Math.max(1, (int)(torrent.getSize() / 262144L) + 1));
-            case "pieceSize"  -> t.addProperty("pieceSize", 262144L);
-            case "pieces"     -> t.addProperty("pieces", ""); // base64 bitfield; expensive — skip
+            case "piece_count" -> t.addProperty("piece_count", Math.max(1, (int)(torrent.getSize() / 262144L) + 1));
+            case "piece_size"  -> t.addProperty("piece_size", 262144L);
+            case "pieces"      -> t.addProperty("pieces", "");
 
-            default -> {} // Unknown field — ignore
+            default -> {}
         }
     }
 
     // ── torrent-add ───────────────────────────────────────────────────────────
 
     JsonObject add(JsonObject args) {
-        String  downloadDir = args.has("download-dir") ? args.get("download-dir").getAsString() : null;
+        // Web UI sends snake_case field names
+        String  downloadDir = args.has("download_dir") ? args.get("download_dir").getAsString() : null;
         boolean paused      = args.has("paused") && args.get("paused").getAsBoolean();
 
-        // Fall back to BiglyBT's configured default save path when not specified
         if (downloadDir == null || downloadDir.isEmpty()) {
             try {
                 downloadDir = pi.getPluginconfig().getCoreStringParameter(
@@ -264,9 +249,6 @@ class TrTorrentMethods {
                 Torrent torrent = pi.getTorrentManager().createFromBEncodedData(bytes);
                 dl = pi.getDownloadManager().addDownload(torrent, null, saveDir);
             } else if (args.has("filename")) {
-                // addDownload(URL) is void and doesn't accept a save dir.
-                // BiglyBT handles both HTTP .torrent URLs and magnet links this way.
-                // The client will discover the torrent on the next torrent-get poll.
                 pi.getDownloadManager().addDownload(toURL(args.get("filename").getAsString()));
                 return TransmissionRouter.success(new JsonObject());
             } else {
@@ -278,18 +260,17 @@ class TrTorrentMethods {
             if (paused) {
                 try { dl.stop(); } catch (Exception ignored) {}
             } else {
-                // Force-start to allocate and begin downloading, then revert to normal queuing
                 try { dl.setForceStart(true); } catch (Exception ignored) {}
                 try { dl.setForceStart(false); } catch (Exception ignored) {}
             }
 
             JsonObject added = new JsonObject();
-            added.addProperty("id",         torrentId(dl));
-            added.addProperty("name",       dl.getTorrent().getName());
-            added.addProperty("hashString", TorrentMapper.hashHex(dl.getTorrent().getHash()));
+            added.addProperty("id",          torrentId(dl));
+            added.addProperty("name",        dl.getTorrent().getName());
+            added.addProperty("hash_string", TorrentMapper.hashHex(dl.getTorrent().getHash()));
 
             JsonObject a = new JsonObject();
-            a.add("torrent-added", added);
+            a.add("torrent_added", added);
             return TransmissionRouter.success(a);
 
         } catch (Exception e) {
@@ -300,10 +281,11 @@ class TrTorrentMethods {
     // ── torrent-remove ────────────────────────────────────────────────────────
 
     JsonObject remove(JsonObject args) {
-        boolean del = args.has("delete-local-data") && args.get("delete-local-data").getAsBoolean();
+        boolean del = args.has("delete_local_data") && args.get("delete_local_data").getAsBoolean();
         for (Download dl : resolveIds(args)) {
+            int id = torrentId(dl);
             try { dl.stop(); }              catch (Exception ignored) {}
-            try { dl.remove(false, del); }  catch (Exception ignored) {}
+            try { dl.remove(false, del); recentlyRemovedIds.add(id); } catch (Exception ignored) {}
         }
         return TransmissionRouter.success(new JsonObject());
     }
@@ -312,7 +294,10 @@ class TrTorrentMethods {
 
     JsonObject start(JsonObject args) {
         for (Download dl : resolveIds(args)) {
-            try { dl.resume(); } catch (Exception ignored) {}
+            try {
+                if (dl.isPaused()) dl.resume();
+                else               dl.restart();
+            } catch (Exception ignored) {}
         }
         return TransmissionRouter.success(new JsonObject());
     }
@@ -329,13 +314,13 @@ class TrTorrentMethods {
     JsonObject set(JsonObject args) {
         for (Download dl : resolveIds(args)) {
             try {
-                if (args.has("downloadLimit"))
-                    dl.setDownloadRateLimitBytesPerSecond(args.get("downloadLimit").getAsInt() * 1024);
-                if (args.has("downloadLimited") && !args.get("downloadLimited").getAsBoolean())
+                if (args.has("download_limit"))
+                    dl.setDownloadRateLimitBytesPerSecond(args.get("download_limit").getAsInt() * 1024);
+                if (args.has("download_limited") && !args.get("download_limited").getAsBoolean())
                     dl.setDownloadRateLimitBytesPerSecond(0);
-                if (args.has("uploadLimit"))
-                    dl.setUploadRateLimitBytesPerSecond(args.get("uploadLimit").getAsInt() * 1024);
-                if (args.has("uploadLimited") && !args.get("uploadLimited").getAsBoolean())
+                if (args.has("upload_limit"))
+                    dl.setUploadRateLimitBytesPerSecond(args.get("upload_limit").getAsInt() * 1024);
+                if (args.has("upload_limited") && !args.get("upload_limited").getAsBoolean())
                     dl.setUploadRateLimitBytesPerSecond(0);
                 if (args.has("labels")) {
                     com.biglybt.pif.torrent.TorrentAttribute attr = TorrentMapper.getTagsAttr();
@@ -345,8 +330,8 @@ class TrTorrentMethods {
                         dl.setListAttribute(attr, labels.toArray(new String[0]));
                     }
                 }
-                if (args.has("queuePosition"))
-                    dl.setPosition(args.get("queuePosition").getAsInt());
+                if (args.has("queue_position"))
+                    dl.setPosition(args.get("queue_position").getAsInt());
                 applyFilePriorities(dl, args);
             } catch (Exception ignored) {}
         }
@@ -389,8 +374,6 @@ class TrTorrentMethods {
     // ── torrent-rename-path ───────────────────────────────────────────────────
 
     JsonObject renamePath(JsonObject args) {
-        // BiglyBT plugin API doesn't directly support renaming files within a torrent.
-        // Echo the new name back so clients don't treat it as a failure.
         String name = args.has("name") ? args.get("name").getAsString() : "";
         JsonObject a = new JsonObject();
         a.addProperty("path", name);
@@ -409,8 +392,8 @@ class TrTorrentMethods {
         try { File f = new File(path); free = f.getFreeSpace(); total = f.getTotalSpace(); } catch (Exception ignored) {}
         JsonObject a = new JsonObject();
         a.addProperty("path",       path);
-        a.addProperty("size-bytes", free);
-        a.addProperty("total-size", total);
+        a.addProperty("size_bytes", free);
+        a.addProperty("total_size", total);
         return TransmissionRouter.success(a);
     }
 
@@ -433,36 +416,34 @@ class TrTorrentMethods {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /** Stable positive integer ID derived from first 4 bytes of the info-hash. */
     static int torrentId(Download dl) {
         byte[] hash = dl.getTorrent().getHash();
         int id = ((hash[0] & 0xFF) << 24) | ((hash[1] & 0xFF) << 16)
                | ((hash[2] & 0xFF) <<  8) |  (hash[3] & 0xFF);
-        id &= 0x7FFFFFFF; // clear sign bit — ensures positive
+        id &= 0x7FFFFFFF;
         return id == 0 ? 1 : id;
     }
 
     private Download findById(int id) {
         for (Download dl : pi.getDownloadManager().getDownloads()) {
-            if (dl.getTorrent() != null && torrentId(dl) == id) return dl;
+            if (TorrentMapper.isUserDownload(dl) && torrentId(dl) == id) return dl;
         }
         return null;
     }
 
-    /** Resolve the "ids" RPC argument to matching Downloads. Absent/null → all. */
     private List<Download> resolveIds(JsonObject args) {
         List<Download> result = new ArrayList<>();
         if (!args.has("ids")) {
             for (Download dl : pi.getDownloadManager().getDownloads())
-                if (dl.getTorrent() != null) result.add(dl);
+                if (TorrentMapper.isUserDownload(dl)) result.add(dl);
             return result;
         }
         JsonElement idsEl = args.get("ids");
         if (idsEl.isJsonPrimitive()) {
             String s = idsEl.getAsString();
-            if ("recently-active".equals(s)) {
+            if ("recently-active".equals(s) || "recently_active".equals(s)) {
                 for (Download dl : pi.getDownloadManager().getDownloads())
-                    if (dl.getTorrent() != null) result.add(dl);
+                    if (TorrentMapper.isUserDownload(dl)) result.add(dl);
             } else {
                 try { Download dl = findById(Integer.parseInt(s)); if (dl != null) result.add(dl); } catch (Exception ignored) {}
             }
@@ -569,33 +550,33 @@ class TrTorrentMethods {
     private JsonObject trackerStatEntry(URL url, int id, int tier, int seeds, int leechers) {
         long now = System.currentTimeMillis() / 1000L;
         JsonObject e = new JsonObject();
-        e.addProperty("id",                     id);
-        e.addProperty("tier",                   tier);
-        e.addProperty("isBackup",               tier > 0);
-        e.addProperty("announce",               url.toString());
-        e.addProperty("scrape",                 url.toString().replace("/announce", "/scrape"));
-        e.addProperty("host",                   url.getHost());
-        e.addProperty("sitename",               url.getHost());
-        e.addProperty("announceState",          1);
-        e.addProperty("scrapeState",            1);
-        e.addProperty("seederCount",            seeds);
-        e.addProperty("leecherCount",           leechers);
-        e.addProperty("downloadCount",          -1);
-        e.addProperty("hasAnnounced",           true);
-        e.addProperty("hasScraped",             seeds >= 0);
-        e.addProperty("lastAnnounceSucceeded",  true);
-        e.addProperty("lastAnnounceResult",     "Success");
-        e.addProperty("lastAnnounceTime",       now - 600);
-        e.addProperty("lastAnnounceStartTime",  now - 600);
-        e.addProperty("lastAnnounceTimedOut",   false);
-        e.addProperty("lastAnnouncePeerCount",  seeds >= 0 ? seeds + leechers : 0);
-        e.addProperty("lastScrapeSucceeded",    seeds >= 0);
-        e.addProperty("lastScrapeResult",       seeds >= 0 ? "Success" : "");
-        e.addProperty("lastScrapeTime",         now - 600);
-        e.addProperty("lastScrapeStartTime",    now - 600);
-        e.addProperty("lastScrapeTimedOut",     false);
-        e.addProperty("nextAnnounceTime",       now + 1800);
-        e.addProperty("nextScrapeTime",         now + 1800);
+        e.addProperty("id",                       id);
+        e.addProperty("tier",                     tier);
+        e.addProperty("is_backup",                tier > 0);
+        e.addProperty("announce",                 url.toString());
+        e.addProperty("scrape",                   url.toString().replace("/announce", "/scrape"));
+        e.addProperty("host",                     url.getHost());
+        e.addProperty("sitename",                 url.getHost());
+        e.addProperty("announce_state",           1);
+        e.addProperty("scrape_state",             1);
+        e.addProperty("seeder_count",             seeds);
+        e.addProperty("leecher_count",            leechers);
+        e.addProperty("download_count",           -1);
+        e.addProperty("has_announced",            true);
+        e.addProperty("has_scraped",              seeds >= 0);
+        e.addProperty("last_announce_succeeded",  true);
+        e.addProperty("last_announce_result",     "Success");
+        e.addProperty("last_announce_time",       now - 600);
+        e.addProperty("last_announce_start_time", now - 600);
+        e.addProperty("last_announce_timed_out",  false);
+        e.addProperty("last_announce_peer_count", seeds >= 0 ? seeds + leechers : 0);
+        e.addProperty("last_scrape_succeeded",    seeds >= 0);
+        e.addProperty("last_scrape_result",       seeds >= 0 ? "Success" : "");
+        e.addProperty("last_scrape_time",         now - 600);
+        e.addProperty("last_scrape_start_time",   now - 600);
+        e.addProperty("last_scrape_timed_out",    false);
+        e.addProperty("next_announce_time",       now + 1800);
+        e.addProperty("next_scrape_time",         now + 1800);
         return e;
     }
 
@@ -635,12 +616,12 @@ class TrTorrentMethods {
                         else
                             name = fi.getFile(false).getName();
                     } catch (Exception ignored) {}
-                    JsonObject f = new JsonObject();
-                    f.addProperty("name",           name);
-                    f.addProperty("length",         fi.getLength());
-                    f.addProperty("bytesCompleted", fi.getDownloaded());
-                    f.addProperty("priority",       toPriority(fi.getNumericPriority()));
-                    arr.add(f);
+                    JsonObject file = new JsonObject();
+                    file.addProperty("name",            name);
+                    file.addProperty("length",          fi.getLength());
+                    file.addProperty("bytes_completed", fi.getDownloaded());
+                    file.addProperty("priority",        toPriority(fi.getNumericPriority()));
+                    arr.add(file);
                 } catch (Exception ignored) {}
             }
         } catch (Exception ignored) {}
@@ -655,30 +636,12 @@ class TrTorrentMethods {
             for (DiskManagerFileInfo fi : files) {
                 try {
                     JsonObject fs = new JsonObject();
-                    fs.addProperty("bytesCompleted", fi.getDownloaded());
-                    fs.addProperty("wanted",         !fi.isSkipped());
-                    fs.addProperty("priority",       toPriority(fi.getNumericPriority()));
+                    fs.addProperty("bytes_completed", fi.getDownloaded());
+                    fs.addProperty("wanted",          !fi.isSkipped());
+                    fs.addProperty("priority",        toPriority(fi.getNumericPriority()));
                     arr.add(fs);
                 } catch (Exception ignored) {}
             }
-        } catch (Exception ignored) {}
-        return arr;
-    }
-
-    private JsonArray buildPriorities(Download dl) {
-        JsonArray arr = new JsonArray();
-        try {
-            DiskManagerFileInfo[] files = dl.getDiskManagerFileInfo();
-            if (files != null) for (DiskManagerFileInfo fi : files) arr.add(toPriority(fi.getNumericPriority()));
-        } catch (Exception ignored) {}
-        return arr;
-    }
-
-    private JsonArray buildWanted(Download dl) {
-        JsonArray arr = new JsonArray();
-        try {
-            DiskManagerFileInfo[] files = dl.getDiskManagerFileInfo();
-            if (files != null) for (DiskManagerFileInfo fi : files) arr.add(fi.isSkipped() ? 0 : 1);
         } catch (Exception ignored) {}
         return arr;
     }
@@ -694,18 +657,18 @@ class TrTorrentMethods {
                 try {
                     PeerStats ps = peer.getStats();
                     JsonObject p = new JsonObject();
-                    p.addProperty("address",          peer.getIp());
-                    p.addProperty("port",             peer.getTCPListenPort() > 0 ? peer.getTCPListenPort() : peer.getPort());
-                    p.addProperty("clientName",       peer.getClient() != null ? peer.getClient() : "");
-                    p.addProperty("progress",         peer.getPercentDoneInThousandNotation() / 1000.0);
-                    p.addProperty("rateToClient",     ps != null ? ps.getDownloadAverage() : 0);
-                    p.addProperty("rateToPeer",       ps != null ? ps.getUploadAverage()   : 0);
-                    p.addProperty("flagStr",          "");
-                    p.addProperty("isUTP",            false);
-                    p.addProperty("isIncoming",       peer.isIncoming());
-                    p.addProperty("isEncrypted",      false);
-                    p.addProperty("isDownloadingFrom", ps != null && ps.getDownloadAverage() > 0);
-                    p.addProperty("isUploadingTo",    ps != null && ps.getUploadAverage()   > 0);
+                    p.addProperty("address",           peer.getIp());
+                    p.addProperty("port",              peer.getTCPListenPort() > 0 ? peer.getTCPListenPort() : peer.getPort());
+                    p.addProperty("client_name",       peer.getClient() != null ? peer.getClient() : "");
+                    p.addProperty("progress",          peer.getPercentDoneInThousandNotation() / 1000.0);
+                    p.addProperty("rate_to_client",    ps != null ? ps.getDownloadAverage() : 0);
+                    p.addProperty("rate_to_peer",      ps != null ? ps.getUploadAverage()   : 0);
+                    p.addProperty("flag_str",          "");
+                    p.addProperty("is_utp",            false);
+                    p.addProperty("is_incoming",       peer.isIncoming());
+                    p.addProperty("is_encrypted",      false);
+                    p.addProperty("is_downloading_from", ps != null && ps.getDownloadAverage() > 0);
+                    p.addProperty("is_uploading_to",   ps != null && ps.getUploadAverage()   > 0);
                     arr.add(p);
                 } catch (Exception ignored) {}
             }
@@ -717,33 +680,32 @@ class TrTorrentMethods {
         DiskManagerFileInfo[] files;
         try { files = dl.getDiskManagerFileInfo(); } catch (Exception e) { return; }
         if (files == null) return;
-        if (args.has("files-wanted")) {
-            Set<Integer> wanted = toIntSet(args.getAsJsonArray("files-wanted"));
+        if (args.has("files_wanted")) {
+            Set<Integer> wanted = toIntSet(args.getAsJsonArray("files_wanted"));
             for (int i = 0; i < files.length; i++) if (wanted.contains(i)) try { files[i].setSkipped(false); } catch (Exception ignored) {}
         }
-        if (args.has("files-unwanted")) {
-            Set<Integer> unwanted = toIntSet(args.getAsJsonArray("files-unwanted"));
+        if (args.has("files_unwanted")) {
+            Set<Integer> unwanted = toIntSet(args.getAsJsonArray("files_unwanted"));
             for (int i = 0; i < files.length; i++) if (unwanted.contains(i)) try { files[i].setSkipped(true); } catch (Exception ignored) {}
         }
-        if (args.has("priority-high")) {
-            Set<Integer> hi = toIntSet(args.getAsJsonArray("priority-high"));
+        if (args.has("priority_high")) {
+            Set<Integer> hi = toIntSet(args.getAsJsonArray("priority_high"));
             for (int i = 0; i < files.length; i++) if (hi.contains(i)) try { files[i].setNumericPriority(DiskManagerFileInfo.PRIORITY_HIGH); } catch (Exception ignored) {}
         }
-        if (args.has("priority-normal")) {
-            Set<Integer> normal = toIntSet(args.getAsJsonArray("priority-normal"));
+        if (args.has("priority_normal")) {
+            Set<Integer> normal = toIntSet(args.getAsJsonArray("priority_normal"));
             for (int i = 0; i < files.length; i++) if (normal.contains(i)) try { files[i].setNumericPriority(DiskManagerFileInfo.PRIORITY_NORMAL); } catch (Exception ignored) {}
         }
-        if (args.has("priority-low")) {
-            Set<Integer> lo = toIntSet(args.getAsJsonArray("priority-low"));
+        if (args.has("priority_low")) {
+            Set<Integer> lo = toIntSet(args.getAsJsonArray("priority_low"));
             for (int i = 0; i < files.length; i++) if (lo.contains(i)) try { files[i].setNumericPriority(DiskManagerFileInfo.PRIORITY_LOW); } catch (Exception ignored) {}
         }
     }
 
-    /** Map BiglyBT file priority (raw int) to Transmission priority (-1 low, 0 normal, 1 high). */
     private static int toPriority(int biglyBTPriority) {
-        if (biglyBTPriority > 1)  return  1; // high
-        if (biglyBTPriority < 0)  return -1; // low
-        return 0;                             // normal
+        if (biglyBTPriority > 1)  return  1;
+        if (biglyBTPriority < 0)  return -1;
+        return 0;
     }
 
     private static Set<Integer> toIntSet(JsonArray arr) {
@@ -752,15 +714,9 @@ class TrTorrentMethods {
         return set;
     }
 
-    /**
-     * Convert a filename/URL string to a java.net.URL.
-     * Handles "magnet:" scheme which is not registered by default in Java.
-     */
     private static URL toURL(String s) throws Exception {
         if (s.startsWith("magnet:")) {
-            // BiglyBT registers the magnet: protocol at startup; try the standard way first.
             try { return new URL(s); } catch (java.net.MalformedURLException ignored) {}
-            // Fallback: wrap with a no-op URLStreamHandler so the URL object can be created.
             return new URL(null, s, new java.net.URLStreamHandler() {
                 @Override
                 protected java.net.URLConnection openConnection(URL u) throws java.io.IOException {
@@ -769,20 +725,6 @@ class TrTorrentMethods {
             });
         }
         return new URL(s);
-    }
-
-    /** Convert underscore_case or hyphen-case to camelCase: "percent_done" → "percentDone". */
-    static String underscoreToCamel(String s) {
-        if (s == null || s.isEmpty()) return s;
-        StringBuilder sb = new StringBuilder();
-        boolean upper = false;
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c == '_' || c == '-') { upper = true; continue; }
-            sb.append(upper ? Character.toUpperCase(c) : c);
-            upper = false;
-        }
-        return sb.toString();
     }
 
     private static String urlEncode(String s) {

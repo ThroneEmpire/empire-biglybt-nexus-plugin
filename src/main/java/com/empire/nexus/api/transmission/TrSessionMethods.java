@@ -27,8 +27,8 @@ class TrSessionMethods {
         PluginConfig pc = pi.getPluginconfig();
         JsonObject a = new JsonObject();
 
-        // Identity
-        a.addProperty("version",             "3.00 (Nexus)");
+        // Identity — UI parses "VERSION (HEX_CHECKSUM)" with regex /^(.*)\s\(([\da-f]+)\)/
+        a.addProperty("version",             "4.0.6 (nexus00)");
         a.addProperty("rpc-version",         17);
         a.addProperty("rpc-version-minimum", 14);
         a.addProperty("session-id",          TransmissionRouter.SESSION_ID);
@@ -132,6 +132,7 @@ class TrSessionMethods {
         a.addProperty("script-torrent-done-filename",         "");
         a.addProperty("script-torrent-done-seeding-enabled",  false);
         a.addProperty("script-torrent-done-seeding-filename", "");
+        a.addProperty("default-trackers",                     "");
 
         return TransmissionRouter.success(a);
     }
@@ -141,14 +142,17 @@ class TrSessionMethods {
     JsonObject set(JsonObject args) {
         PluginConfig pc = pi.getPluginconfig();
         try {
-            if (args.has("speed-limit-down"))
+            // Web UI sends snake_case; also accept hyphen-case for CLI clients
+            String dlKey = args.has("speed_limit_down") ? "speed_limit_down" : "speed-limit-down";
+            String ulKey = args.has("speed_limit_up")   ? "speed_limit_up"   : "speed-limit-up";
+            if (args.has(dlKey))
                 pc.setCoreLongParameter(
                         PluginConfig.CORE_PARAM_LONG_MAX_DOWNLOAD_SPEED_KBYTES_PER_SEC,
-                        args.get("speed-limit-down").getAsLong());
-            if (args.has("speed-limit-up"))
+                        args.get(dlKey).getAsLong());
+            if (args.has(ulKey))
                 pc.setCoreLongParameter(
                         PluginConfig.CORE_PARAM_LONG_MAX_UPLOAD_SPEED_KBYTES_PER_SEC,
-                        args.get("speed-limit-up").getAsLong());
+                        args.get(ulKey).getAsLong());
         } catch (Exception ignored) {}
         return TransmissionRouter.success(new JsonObject());
     }

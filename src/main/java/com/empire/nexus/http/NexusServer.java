@@ -51,11 +51,13 @@ public class NexusServer {
         server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
         server.setExecutor(Executors.newCachedThreadPool());
 
-        // qBittorrent WebUI API — compatible with qBittorrent-Web, cotorrent, etc.
-        server.createContext("/api/v2", new QbtRouter(pi, this));
-
-        // Transmission RPC — Flood UI / Tremotesf / Transmission-Qt support
-        server.createContext("/transmission/rpc", new TransmissionRouter(pi, this));
+        if ("transmission".equals(mode)) {
+            // Transmission RPC — only active in Transmission mode
+            server.createContext("/transmission/rpc", new TransmissionRouter(pi, this));
+        } else {
+            // qBittorrent WebUI API — only active in qBittorrent mode
+            server.createContext("/api/v2", new QbtRouter(pi, this));
+        }
 
         // Static file serving — mode selects where the UI is mounted
         diagConfiguredPath = webuiPath.isEmpty() ? "(empty — not configured)" : webuiPath;
