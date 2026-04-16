@@ -16,6 +16,8 @@ public class NexusServer {
 
     private final int port;
     private final boolean bypassAuth;
+    private final String username;
+    private final String password;
     private final String webuiPath;
     private final PluginInterface pi;
 
@@ -30,12 +32,18 @@ public class NexusServer {
 
     private HttpServer server;
 
-    public NexusServer(int port, boolean bypassAuth, String webuiPath, PluginInterface pi) {
+    public NexusServer(int port, boolean bypassAuth, String username, String password,
+                       String webuiPath, PluginInterface pi) {
         this.port       = port;
         this.bypassAuth = bypassAuth;
+        this.username   = username != null ? username : "admin";
+        this.password   = password != null ? password : "";
         this.webuiPath  = webuiPath == null ? "" : webuiPath.trim();
         this.pi         = pi;
     }
+
+    public String getUsername() { return username; }
+    public String getPassword() { return password; }
 
     public void start() throws Exception {
         server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);

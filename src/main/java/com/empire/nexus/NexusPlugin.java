@@ -3,12 +3,17 @@ package com.empire.nexus;
 import com.biglybt.pif.Plugin;
 import com.biglybt.pif.PluginException;
 import com.biglybt.pif.PluginInterface;
+import com.empire.nexus.util.TorrentMapper;
 import com.biglybt.pif.logging.LoggerChannel;
 import com.biglybt.pif.ui.config.BooleanParameter;
 import com.biglybt.pif.ui.config.DirectoryParameter;
 import com.biglybt.pif.ui.config.HyperlinkParameter;
 import com.biglybt.pif.ui.config.IntParameter;
+import com.biglybt.pif.ui.config.PasswordParameter;
+import com.biglybt.pif.ui.config.StringParameter;
 import com.biglybt.pif.ui.model.BasicPluginConfigModel;
+
+import java.nio.charset.StandardCharsets;
 import com.empire.nexus.http.NexusServer;
 
 /**
@@ -44,16 +49,28 @@ public class NexusPlugin implements Plugin {
                 "nexus.http.port", "nexus.http.port", 8090);
         BooleanParameter bypassParam = config.addBooleanParameter2(
                 "nexus.auth.bypass", "nexus.auth.bypass", true);
+        StringParameter usernameParam = config.addStringParameter2(
+                "nexus.auth.username", "nexus.auth.username", "admin");
+        PasswordParameter passwordParam = config.addPasswordParameter2(
+                "nexus.auth.password", "nexus.auth.password",
+                PasswordParameter.ET_PLAIN, "adminadmin".getBytes(StandardCharsets.UTF_8));
         DirectoryParameter webuiParam = config.addDirectoryParameter2(
                 "nexus.webui.path", "nexus.webui.path", "");
 
         // Read current values
-        int port = portParam.getValue();
-        boolean bypass = bypassParam.getValue();
+        int    port      = portParam.getValue();
+        boolean bypass   = bypassParam.getValue();
+        String username  = usernameParam.getValue();
+        byte[] pwBytes   = passwordParam.getValue();
+        String password  = (pwBytes != null && pwBytes.length > 0)
+                ? new String(pwBytes, StandardCharsets.UTF_8) : "";
         String webuiPath = webuiParam.getValue();
 
+        // Init mapper (attributes, etc.)
+        TorrentMapper.init(pluginInterface);
+
         // Start Server
-        server = new NexusServer(port, bypass, webuiPath, pluginInterface);
+        server = new NexusServer(port, bypass, username, password, webuiPath, pluginInterface);
         try {
             server.start();
         } catch (Exception e) {
@@ -67,6 +84,7 @@ public class NexusPlugin implements Plugin {
 
         log.log(null, "Nexus listening on http://localhost:" + port
                 + "  bypass=" + bypass
+                + (bypass ? "" : "  user=" + username)
                 + (webuiPath.isEmpty() ? "" : "  webui=" + webuiPath));
     }
 }

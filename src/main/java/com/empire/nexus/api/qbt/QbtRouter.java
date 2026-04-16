@@ -13,6 +13,7 @@ import java.io.IOException;
  *
  *   /api/v2/auth/*        → AuthHandler
  *   /api/v2/app/*         → AppHandler
+ *   /api/v2/log/*         → LogHandler
  *   /api/v2/torrents/*    → TorrentsHandler
  *   /api/v2/transfer/*    → TransferHandler
  *   /api/v2/sync/*        → SyncHandler
@@ -21,6 +22,7 @@ public class QbtRouter implements HttpHandler {
 
     private final AuthHandler      auth;
     private final AppHandler       app;
+    private final LogHandler       log;
     private final TorrentsHandler  torrents;
     private final TransferHandler  transfer;
     private final SyncHandler      sync;
@@ -29,7 +31,8 @@ public class QbtRouter implements HttpHandler {
     public QbtRouter(PluginInterface pi, NexusServer server) {
         this.server   = server;
         this.auth     = new AuthHandler(server);
-        this.app      = new AppHandler(pi);
+        this.app      = new AppHandler(pi, server);
+        this.log      = new LogHandler();
         this.torrents = new TorrentsHandler(pi);
         this.transfer = new TransferHandler(pi);
         this.sync     = new SyncHandler(pi);
@@ -58,6 +61,7 @@ public class QbtRouter implements HttpHandler {
         }
 
         if      (path.startsWith("/api/v2/app/"))      app.handle(exchange);
+        else if (path.startsWith("/api/v2/log/"))      log.handle(exchange);
         else if (path.startsWith("/api/v2/torrents/")) torrents.handle(exchange);
         else if (path.startsWith("/api/v2/transfer/")) transfer.handle(exchange);
         else if (path.startsWith("/api/v2/sync/"))     sync.handle(exchange);

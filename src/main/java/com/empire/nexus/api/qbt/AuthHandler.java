@@ -16,14 +16,10 @@ import java.util.UUID;
  * POST /api/v2/auth/logout
  *   Response: "Ok."
  *
- * When nexus.auth.bypass=true (plugin default) every login attempt succeeds.
+ * Credentials are read from the plugin settings (nexus.auth.username / nexus.auth.password).
+ * When nexus.auth.bypass=true every login attempt succeeds without checking credentials.
  */
 public class AuthHandler {
-
-    // Default credentials when auth is NOT bypassed.
-    // TODO: pull from BiglyBT plugin config parameters
-    private static final String DEFAULT_USERNAME = "admin";
-    private static final String DEFAULT_PASSWORD = "adminadmin";
 
     private final NexusServer server;
 
@@ -45,7 +41,7 @@ public class AuthHandler {
         String password = params.getOrDefault("password", "");
 
         boolean ok = server.isBypassAuth()
-                || (DEFAULT_USERNAME.equals(username) && DEFAULT_PASSWORD.equals(password));
+                || (server.getUsername().equals(username) && server.getPassword().equals(password));
 
         if (!ok) {
             HttpUtils.sendText(exchange, "Fails.");

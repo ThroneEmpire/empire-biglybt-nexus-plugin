@@ -1,17 +1,19 @@
 package com.empire.nexus.api.qbt;
 
+import java.io.IOException;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
+
 import com.biglybt.pif.PluginInterface;
 import com.biglybt.pif.download.Download;
 import com.biglybt.pif.download.DownloadStats;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
+import com.biglybt.pif.torrent.TorrentAttribute;
 import com.empire.nexus.http.HttpUtils;
 import com.empire.nexus.util.TorrentMapper;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 import com.sun.net.httpserver.HttpExchange;
-
-import java.io.IOException;
-import java.util.Map;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * GET /api/v2/sync/maindata?rid=0
@@ -49,7 +51,7 @@ public class SyncHandler {
         long dlSpeed = 0, ulSpeed = 0, dlData = 0, ulData = 0, peers = 0;
 
         for (Download dl : downloads) {
-            if (dl.getTorrent() == null) continue;
+            if (!TorrentMapper.isUserDownload(dl)) continue;
             String hash = TorrentMapper.hashHex(dl.getTorrent().getHash());
             torrents.add(hash, TorrentMapper.toQbtInfo(dl));
 
@@ -67,15 +69,49 @@ public class SyncHandler {
         // ── Server state ──────────────────────────────────────────────────────
         JsonObject state = buildServerState(dlSpeed, ulSpeed, dlData, ulData, peers);
 
+        // ── Categories ────────────────────────────────────────────────────────
+        JsonObject categories = new JsonObject();
+        Set<String> catSeen = new HashSet<>();
+        for (Download dl : downloads) {
+            if (!TorrentMapper.isUserDownload(dl)) continue;
+            try {
+                String cat = dl.getCategoryName();
+                if (cat != null && !cat.isEmpty() && catSeen.add(cat)) {
+                    JsonObject catObj = new JsonObject();
+                    catObj.addProperty("name",     cat);
+                    catObj.addProperty("savePath", "");
+                    categories.add(cat, catObj);
+                }
+            } catch (Exception ignored) {}
+        }
+
+        // ── Tags ──────────────────────────────────────────────────────────────
+        JsonArray tagsArr = new JsonArray();
+        Set<String> tagSeen = new HashSet<>();
+        TorrentAttribute tagsAttr = TorrentMapper.getTagsAttr();
+        if (tagsAttr != null) {
+            for (Download dl : downloads) {
+                if (!TorrentMapper.isUserDownload(dl)) continue;
+                try {
+                    String[] stored = dl.getListAttribute(tagsAttr);
+                    if (stored != null) {
+                        for (String t : stored) {
+                            if (t != null && !t.isEmpty() && tagSeen.add(t)) tagsArr.add(t);
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+
         // ── Root ──────────────────────────────────────────────────────────────
         JsonObject root = new JsonObject();
         root.addProperty("rid",         newRid);
         root.addProperty("full_update", true);
         root.add("torrents",            torrents);
         root.add("torrents_removed",    new JsonArray());
-        root.add("categories",          new JsonObject());
+        root.add("categories",          categories);
         root.add("categories_removed",  new JsonArray());
-        root.add("tags",                new JsonArray());
+        root.add("tags",                tagsArr);
         root.add("tags_removed",        new JsonArray());
         root.add("trackers",            new JsonObject());
         root.add("server_state",        state);
@@ -86,7 +122,25 @@ public class SyncHandler {
     // ── GET /api/v2/sync/torrentPeers?hash= ──────────────────────────────────
 
     private void torrentPeers(HttpExchange exchange) throws IOException {
-        HttpUtils.sendJson(exchange, "{\"full_update\":true,\"peers\":{},\"rid\":1}");
+        String hash = HttpUtils.queryParams(exchange).get("hash");
+        Download dl = null;
+        if (hash != null) {
+            for (Download d : pi.getDownloadManager().getDownloads()) {
+                if (TorrentMapper.isUserDownload(d) &&
+                    hash.equalsIgnoreCase(TorrentMapper.hashHex(d.getTorrent().getHash()))) {
+                    dl = d;
+                    break;
+                }
+            }
+        }
+
+        JsonObject result = new JsonObject();
+        result.addProperty("full_update", true);
+        result.addProperty("rid",         ridCounter.getAndIncrement());
+        result.addProperty("show_flags",  true);
+        result.add("peers", dl != null ? TorrentMapper.buildPeersJson(dl)
+                                       : new com.google.gson.JsonObject());
+        HttpUtils.sendJson(exchange, result.toString());
     }
 
     // ── ServerState builder ───────────────────────────────────────────────────
