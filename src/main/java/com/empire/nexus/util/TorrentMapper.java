@@ -13,7 +13,7 @@ import com.google.gson.JsonObject;
 
 /**
  * Maps a BiglyBT {@link Download} to the JSON shape qBittorrent returns from
- * /api/v2/torrents/info — covering every field VueTorrent's RawTorrent type uses.
+ * /api/v2/torrents/info — covering fields used by qBittorrent-compatible web UIs.
  *
  * Call {@link #init(PluginInterface)} once at plugin startup before any mapping.
  *
@@ -23,7 +23,7 @@ import com.google.gson.JsonObject;
  */
 public final class TorrentMapper {
 
-    /** Plugin attribute used to persist VueTorrent-managed tags per download. */
+    /** Plugin attribute used to persist tags per download. */
     private static TorrentAttribute tagsAttr;
 
     private TorrentMapper() {}

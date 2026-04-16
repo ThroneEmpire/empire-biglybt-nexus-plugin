@@ -55,8 +55,9 @@ public final class HttpUtils {
         ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         ex.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
         ex.getResponseHeaders().set("Access-Control-Allow-Headers",
-                "Content-Type, Accept, Cookie, X-Requested-With");
-        ex.getResponseHeaders().set("Access-Control-Allow-Credentials", "true");
+                "Content-Type, Accept, Cookie, X-Requested-With, X-Transmission-Session-Id, Authorization");
+        ex.getResponseHeaders().set("Access-Control-Expose-Headers",
+                "X-Transmission-Session-Id");
     }
 
     // ── Request helpers ───────────────────────────────────────────────────────

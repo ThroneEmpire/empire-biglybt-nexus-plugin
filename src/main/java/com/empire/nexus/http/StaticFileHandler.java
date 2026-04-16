@@ -11,7 +11,7 @@ import java.util.Map;
 /**
  * Serves static files from a directory on disk.
  *
- * Usage: point nexus.webui.path at your VueTorrent dist/ folder, then open
+ * Usage: point nexus.webui.path at your web UI dist/ folder, then open
  * http://localhost:8090/ — this handler serves index.html for every path that
  * doesn't match a real file (SPA history-mode routing).
  *
@@ -44,12 +44,18 @@ public class StaticFileHandler implements HttpHandler {
             Map.entry("map",   "application/json; charset=utf-8")
     );
 
-    private final File baseDir;
-    private final File indexFile;
+    private final File   baseDir;
+    private final File   indexFile;
+    private final String prefix;   // URI prefix to strip before resolving, e.g. "/transmission/web"
 
     public StaticFileHandler(String path) {
+        this(path, "");
+    }
+
+    public StaticFileHandler(String path, String prefix) {
         this.baseDir   = new File(path).getAbsoluteFile();
         this.indexFile = new File(baseDir, "index.html");
+        this.prefix    = prefix;
     }
 
     public String getResolvedBasePath() {
@@ -109,8 +115,11 @@ public class StaticFileHandler implements HttpHandler {
      * Resolve a URI path to a File inside baseDir, or null if it would escape.
      */
     private File resolve(String uriPath) {
-        // Strip query and fragment, normalise leading slash
+        // Strip query and fragment
         String clean = uriPath.split("\\?")[0].split("#")[0];
+        // Strip context prefix so /transmission/web/foo.js → /foo.js
+        if (!prefix.isEmpty() && clean.startsWith(prefix))
+            clean = clean.substring(prefix.length());
         if (clean.isEmpty() || clean.equals("/")) clean = "/index.html";
 
         try {

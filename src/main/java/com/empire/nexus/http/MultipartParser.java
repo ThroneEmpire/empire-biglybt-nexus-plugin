@@ -12,7 +12,7 @@ import java.util.List;
 /**
  * Minimal multipart/form-data parser.
  *
- * Handles the subset used by VueTorrent's torrent upload:
+ * Handles the subset used by qBittorrent web UI torrent upload:
  *   POST /api/v2/torrents/add
  *   Content-Type: multipart/form-data; boundary=<token>
  *

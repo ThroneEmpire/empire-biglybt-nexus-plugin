@@ -18,6 +18,7 @@ public class NexusServer {
     private final boolean bypassAuth;
     private final String username;
     private final String password;
+    private final String mode;
     private final String webuiPath;
     private final PluginInterface pi;
 
@@ -33,11 +34,12 @@ public class NexusServer {
     private HttpServer server;
 
     public NexusServer(int port, boolean bypassAuth, String username, String password,
-                       String webuiPath, PluginInterface pi) {
+                       String mode, String webuiPath, PluginInterface pi) {
         this.port       = port;
         this.bypassAuth = bypassAuth;
         this.username   = username != null ? username : "admin";
         this.password   = password != null ? password : "";
+        this.mode       = mode     != null ? mode.trim() : "qbittorrent";
         this.webuiPath  = webuiPath == null ? "" : webuiPath.trim();
         this.pi         = pi;
     }
@@ -49,26 +51,37 @@ public class NexusServer {
         server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
         server.setExecutor(Executors.newCachedThreadPool());
 
-        // qBittorrent WebUI API — VueTorrent, qBittorrent-Web, etc.
+        // qBittorrent WebUI API — compatible with qBittorrent-Web, cotorrent, etc.
         server.createContext("/api/v2", new QbtRouter(pi, this));
 
-        // Transmission RPC — skeleton for future Flood UI / Tremotesf support
-        server.createContext("/transmission/rpc", new TransmissionRouter(pi));
+        // Transmission RPC — Flood UI / Tremotesf / Transmission-Qt support
+        server.createContext("/transmission/rpc", new TransmissionRouter(pi, this));
 
-        // Static file serving (VueTorrent or any other SPA)
+        // Static file serving — mode selects where the UI is mounted
         diagConfiguredPath = webuiPath.isEmpty() ? "(empty — not configured)" : webuiPath;
 
         if (!webuiPath.isEmpty()) {
-            StaticFileHandler staticHandler = new StaticFileHandler(webuiPath);
-
-            diagResolvedPath = staticHandler.getResolvedBasePath();
-            diagIndexPath    = staticHandler.getResolvedIndexPath();
-            diagIndexExists  = staticHandler.isAvailable();
-
-            if (diagIndexExists) {
-                server.createContext("/", staticHandler);
-            } else {
+            if ("transmission".equals(mode)) {
+                // Serve under /transmission/web/
+                StaticFileHandler trStatic = new StaticFileHandler(webuiPath, "/transmission/web");
+                diagResolvedPath = trStatic.getResolvedBasePath();
+                diagIndexPath    = trStatic.getResolvedIndexPath();
+                diagIndexExists  = trStatic.isAvailable();
+                if (diagIndexExists) {
+                    server.createContext("/transmission/web", trStatic);
+                }
                 server.createContext("/", this::rootFallback);
+            } else {
+                // qbittorrent mode — serve SPA at /
+                StaticFileHandler staticHandler = new StaticFileHandler(webuiPath);
+                diagResolvedPath = staticHandler.getResolvedBasePath();
+                diagIndexPath    = staticHandler.getResolvedIndexPath();
+                diagIndexExists  = staticHandler.isAvailable();
+                if (diagIndexExists) {
+                    server.createContext("/", staticHandler);
+                } else {
+                    server.createContext("/", this::rootFallback);
+                }
             }
         } else {
             server.createContext("/", this::rootFallback);
@@ -97,6 +110,14 @@ public class NexusServer {
             return;
         }
 
+        // Transmission mode with a working web UI: redirect root to the actual UI path
+        if ("transmission".equals(mode) && diagIndexExists) {
+            exchange.getResponseHeaders().set("Location", "/transmission/web/");
+            exchange.sendResponseHeaders(302, -1);
+            exchange.close();
+            return;
+        }
+
         // Show a diagnostic HTML page so the user can see exactly what went wrong
         // without needing to open BiglyBT's log.
         String html = "<!DOCTYPE html><html><head><title>Nexus — Web UI not loaded</title>"
@@ -106,7 +127,7 @@ public class NexusServer {
                 + ".ok{color:#4ecca3}.bad{color:#e94560}</style></head><body>"
                 + "<h1>Nexus — Web UI not loaded</h1>"
                 + "<p>The API is running fine at <code>http://localhost:" + port + "/api/v2/</code>.</p>"
-                + "<p>VueTorrent could not be served. Diagnostic info:</p>"
+                + "<p>The web UI could not be served. Diagnostic info:</p>"
                 + "<table>"
                 + row("nexus.webui.path (from config)", diagConfiguredPath)
                 + row("Resolved base directory",         diagResolvedPath.isEmpty() ? "(n/a)" : diagResolvedPath)
@@ -116,9 +137,9 @@ public class NexusServer {
                         : "<span class='bad'>NO — check the path above</span>")
                 + "</table>"
                 + "<h2>Common fixes</h2><ul>"
-                + "<li>Download a VueTorrent release ZIP from GitHub and <strong>extract</strong> it.</li>"
+                + "<li>Download a qBittorrent-compatible web UI release (e.g. qBittorrent-Web, cotorrent) and <strong>extract</strong> it.</li>"
                 + "<li>The folder you point to must contain <code>index.html</code> directly — not inside a subfolder.</li>"
-                + "<li>In BiglyBT: <em>Tools → Options → Plugins → Nexus</em> → set <em>VueTorrent dist/ folder</em>.</li>"
+                + "<li>In BiglyBT: <em>Tools → Options → Plugins → Nexus</em> → set <em>Web UI folder</em>.</li>"
                 + "<li>Restart BiglyBT after changing the path.</li>"
                 + "</ul></body></html>";
 

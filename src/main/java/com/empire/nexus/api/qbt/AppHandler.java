@@ -288,7 +288,7 @@ public class AppHandler {
 
     private void setPreferences(HttpExchange exchange) throws IOException {
         // Parse the JSON body and apply recognized fields to BiglyBT config.
-        // VueTorrent sends a JSON object (not form params) for this endpoint.
+        // The web UI sends a JSON object (not form params) for this endpoint.
         try {
             String body = new String(exchange.getRequestBody().readAllBytes(),
                     java.nio.charset.StandardCharsets.UTF_8).trim();

@@ -18,7 +18,7 @@ import com.sun.net.httpserver.HttpExchange;
 /**
  * GET /api/v2/sync/maindata?rid=0
  *
- * VueTorrent polls this every few seconds for incremental updates.
+ * The web UI polls this every few seconds for incremental updates.
  * The rid (response ID) lets the server send only changed data after the
  * first full snapshot.  We always return a full snapshot for now — this is
  * spec-compliant because the client must handle full_update:true at any time.

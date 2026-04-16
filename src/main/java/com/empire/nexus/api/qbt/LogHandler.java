@@ -8,7 +8,7 @@ import java.io.IOException;
 /**
  * GET /api/v2/log/main?normal=true&info=true&warning=true&critical=true&last_known_id=-1
  *
- * VueTorrent has a log tab that polls this endpoint.  We return an empty array
+ * Some web UIs have a log tab that polls this endpoint.  We return an empty array
  * because we don't expose BiglyBT's internal log through the API.
  */
 public class LogHandler {

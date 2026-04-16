@@ -10,6 +10,7 @@ import com.biglybt.pif.ui.config.DirectoryParameter;
 import com.biglybt.pif.ui.config.HyperlinkParameter;
 import com.biglybt.pif.ui.config.IntParameter;
 import com.biglybt.pif.ui.config.PasswordParameter;
+import com.biglybt.pif.ui.config.StringListParameter;
 import com.biglybt.pif.ui.config.StringParameter;
 import com.biglybt.pif.ui.model.BasicPluginConfigModel;
 
@@ -23,11 +24,11 @@ import com.empire.nexus.http.NexusServer;
  * <p>
  * nexus.http.port    — TCP port the HTTP server listens on  (default 8090)
  * nexus.auth.bypass  — skip SID cookie check                (default true)
- * nexus.webui.path   — path to VueTorrent dist/ folder      (default "")
+ * nexus.webui.path   — path to the web UI dist/ folder       (default "")
  * <p>
- * To use VueTorrent:
- * 1. Download a VueTorrent release and extract it.
- * 2. Set "VueTorrent dist/ folder" in the plugin settings to that folder.
+ * To use a qBittorrent-compatible web UI (e.g. qBittorrent-Web, cotorrent):
+ * 1. Download a release and extract it.
+ * 2. Set "Web UI folder" in the plugin settings to that folder.
  * 3. Open http://localhost:8090/ — the plugin serves the static files AND
  * the qBittorrent API from the same port.
  */
@@ -54,35 +55,44 @@ public class NexusPlugin implements Plugin {
         PasswordParameter passwordParam = config.addPasswordParameter2(
                 "nexus.auth.password", "nexus.auth.password",
                 PasswordParameter.ET_PLAIN, "adminadmin".getBytes(StandardCharsets.UTF_8));
+        StringListParameter modeParam = config.addStringListParameter2(
+                "nexus.mode", "nexus.mode",
+                new String[]{"qbittorrent", "transmission"},
+                new String[]{"qBittorrent Web UI", "Transmission"},
+                "qbittorrent");
         DirectoryParameter webuiParam = config.addDirectoryParameter2(
                 "nexus.webui.path", "nexus.webui.path", "");
 
         // Read current values
-        int    port      = portParam.getValue();
-        boolean bypass   = bypassParam.getValue();
-        String username  = usernameParam.getValue();
-        byte[] pwBytes   = passwordParam.getValue();
-        String password  = (pwBytes != null && pwBytes.length > 0)
+        int     port       = portParam.getValue();
+        boolean bypass     = bypassParam.getValue();
+        String  username   = usernameParam.getValue();
+        byte[]  pwBytes    = passwordParam.getValue();
+        String  password   = (pwBytes != null && pwBytes.length > 0)
                 ? new String(pwBytes, StandardCharsets.UTF_8) : "";
-        String webuiPath = webuiParam.getValue();
+        String  mode       = modeParam.getValue();
+        String  webuiPath  = webuiParam.getValue();
 
         // Init mapper (attributes, etc.)
         TorrentMapper.init(pluginInterface);
 
         // Start Server
-        server = new NexusServer(port, bypass, username, password, webuiPath, pluginInterface);
+        server = new NexusServer(port, bypass, username, password, mode, webuiPath, pluginInterface);
         try {
             server.start();
         } catch (Exception e) {
             throw new PluginException("Nexus: failed to start HTTP server on port " + port, e);
         }
 
-        // ── Clickable URL
-        HyperlinkParameter urlParam = config.addHyperlinkParameter2(
-                "nexus.server.url", "http://localhost:" + port);
-        urlParam.setHyperlink("http://localhost:" + port);
+        // ── Clickable URL — points to the web UI landing page for the active mode
+        String uiUrl = "transmission".equals(mode)
+                ? "http://localhost:" + port + "/transmission/web/"
+                : "http://localhost:" + port;
+        HyperlinkParameter urlParam = config.addHyperlinkParameter2("nexus.server.url", uiUrl);
+        urlParam.setHyperlink(uiUrl);
 
         log.log(null, "Nexus listening on http://localhost:" + port
+                + "  mode=" + mode
                 + "  bypass=" + bypass
                 + (bypass ? "" : "  user=" + username)
                 + (webuiPath.isEmpty() ? "" : "  webui=" + webuiPath));
