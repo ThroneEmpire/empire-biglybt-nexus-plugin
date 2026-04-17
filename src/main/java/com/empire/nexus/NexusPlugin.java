@@ -58,7 +58,7 @@ public class NexusPlugin implements Plugin {
         StringListParameter modeParam = config.addStringListParameter2(
                 "nexus.mode", "nexus.mode",
                 new String[]{"qbittorrent", "transmission"},
-                new String[]{"qBittorrent Web UI", "Transmission"},
+                new String[]{"qBittorrent", "Transmission"},
                 "qbittorrent");
         DirectoryParameter webuiParam = config.addDirectoryParameter2(
                 "nexus.webui.path", "nexus.webui.path", "");
