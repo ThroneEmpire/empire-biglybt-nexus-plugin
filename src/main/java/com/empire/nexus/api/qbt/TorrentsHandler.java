@@ -41,7 +41,7 @@ public class TorrentsHandler {
             case "files"       -> files(exchange);
             case "peers"       -> peers(exchange);
             case "pieceStates" -> HttpUtils.sendJson(exchange, "[]");
-            case "pieceHashes" -> HttpUtils.sendJson(exchange, "[]");
+            case "pieceHashes" -> pieceHashes(exchange);
             case "categories"  -> categories(exchange);
             case "tags"        -> tags(exchange);
             case "count"       -> count(exchange);
@@ -59,6 +59,8 @@ public class TorrentsHandler {
             case "addTags"       -> addTags(exchange);
             case "removeTags"    -> removeTags(exchange);
 
+            case "downloadLimit"    -> getDownloadLimit(exchange);
+            case "uploadLimit"      -> getUploadLimit(exchange);
             case "setDownloadLimit" -> setDownloadLimit(exchange);
             case "setUploadLimit"   -> setUploadLimit(exchange);
 
@@ -71,27 +73,32 @@ public class TorrentsHandler {
             case "createTags",
                  "deleteTags"       -> HttpUtils.sendText(exchange, "Ok.");
 
+            case "webseeds"      -> webseeds(exchange);
+            case "setLocation",
+                 "setSavePath",
+                 "setDownloadPath" -> setLocation(exchange);
+            case "topPrio"       -> topPrio(exchange);
+            case "bottomPrio"    -> bottomPrio(exchange);
+            case "increasePrio"  -> increasePrio(exchange);
+            case "decreasePrio"  -> decreasePrio(exchange);
+
+            case "toggleSequentialDownload" -> toggleSequentialDownload(exchange);
+
+            case "setForceStart" -> setForceStart(exchange);
+
+            case "addTrackers"    -> addTrackers(exchange);
+            case "removeTrackers" -> removeTrackers(exchange);
+            case "editTracker"    -> editTracker(exchange);
+            case "addPeers"       -> addPeers(exchange);
+            case "exportTorrent"  -> exportTorrent(exchange);
+
             // Misc accepted but no-op
-            case "addPeers",
-                 "setAutoManagement",
-                 "toggleSequentialDownload",
+            case "setAutoManagement",
                  "toggleFirstLastPiecePrio",
-                 "setForceStart",
                  "setSuperSeeding",
-                 "setLocation",
                  "renameFile",
                  "renameFolder",
-                 "setShareLimits",
-                 "setDownloadPath",
-                 "setSavePath",
-                 "addTrackers",
-                 "editTracker",
-                 "removeTrackers",
-                 "topPrio",
-                 "bottomPrio",
-                 "increasePrio",
-                 "decreasePrio",
-                 "exportTorrent"    -> HttpUtils.sendText(exchange, "Ok.");
+                 "setShareLimits"   -> HttpUtils.sendText(exchange, "Ok.");
 
             default -> HttpUtils.sendText(exchange, "Not Found", 404);
         }
@@ -201,21 +208,50 @@ public class TorrentsHandler {
         o.addProperty("created_by",         createdBy);
         o.addProperty("creation_date",      creationDate);
         o.addProperty("private",            isPrivate);
-        o.addProperty("total_wasted",       0L);
+        long wasted = 0;
+        try { wasted = stats.getDiscarded(); } catch (Exception ignored) {}
+        o.addProperty("total_wasted",       wasted);
         o.addProperty("total_uploaded",     ulTotal);
         o.addProperty("total_downloaded",   dlTotal);
         o.addProperty("uploaded_session",   0L);
         o.addProperty("downloaded_session", 0L);
         o.addProperty("share_ratio",        ratio);
-        o.addProperty("addition_date",      timeStarted > 0 ? timeStarted / 1000L : 0L);
-        o.addProperty("completion_date",    stats.getCompleted() >= 1000 ? System.currentTimeMillis() / 1000L : 0L);
+        long addedOn = 0;
+        com.biglybt.core.download.DownloadManagerState dms = TorrentMapper.getDownloadState(dl);
+        if (dms != null) {
+            long addedMs = dms.getLongParameter(com.biglybt.core.download.DownloadManagerState.PARAM_DOWNLOAD_ADDED_TIME);
+            if (addedMs > 0) addedOn = addedMs / 1000L;
+        }
+        if (addedOn <= 0 && timeStarted > 0) addedOn = timeStarted / 1000L;
+        o.addProperty("addition_date", addedOn);
+        long seedStartMs = 0;
+        try { seedStartMs = stats.getTimeStartedSeeding(); } catch (Exception ignored) {}
+        long completionOn = 0;
+        if (dms != null) {
+            long ct = dms.getLongParameter(com.biglybt.core.download.DownloadManagerState.PARAM_DOWNLOAD_COMPLETED_TIME);
+            if (ct > 0) completionOn = ct / 1000L;
+        }
+        if (completionOn <= 0 && seedStartMs > 0) completionOn = seedStartMs / 1000L;
+        o.addProperty("completion_date", completionOn);
         o.addProperty("seen_complete",      0L);
         o.addProperty("reannounce",         0L);
         o.addProperty("has_metadata",       true);
         o.addProperty("popularity",         0.0);
-        o.addProperty("pieces_num",         0);
-        o.addProperty("pieces_have",        0);
-        o.addProperty("piece_size",         0L);
+        int piecesNum = 0, piecesHave = 0;
+        long pieceSize = 0;
+        try { piecesNum = (int) t.getPieceCount(); } catch (Exception ignored) {}
+        try { pieceSize = t.getPieceSize();        } catch (Exception ignored) {}
+        try {
+            DiskManagerFileInfo[] pf = dl.getDiskManagerFileInfo();
+            if (pf != null) {
+                for (DiskManagerFileInfo fi : pf)
+                    piecesHave += (int)(fi.getDownloaded() / Math.max(1, pieceSize > 0 ? pieceSize : 262144));
+                piecesHave = Math.min(piecesHave, piecesNum);
+            }
+        } catch (Exception ignored) {}
+        o.addProperty("pieces_num",         piecesNum);
+        o.addProperty("pieces_have",        piecesHave);
+        o.addProperty("piece_size",         pieceSize);
         o.addProperty("nb_connections",     peersConnected);
         o.addProperty("nb_connections_limit", -1);
         o.addProperty("seeds",              seedsConnected);
@@ -226,11 +262,17 @@ public class TorrentsHandler {
         o.addProperty("dl_speed_avg",       stats.getDownloadAverage());
         o.addProperty("up_speed",           stats.getUploadAverage());
         o.addProperty("up_speed_avg",       stats.getUploadAverage());
-        o.addProperty("dl_limit",           -1);
-        o.addProperty("up_limit",           -1);
+        int dlLim = 0, ulLim = 0;
+        try { dlLim = dl.getDownloadRateLimitBytesPerSecond(); } catch (Exception ignored) {}
+        try { ulLim = dl.getUploadRateLimitBytesPerSecond();   } catch (Exception ignored) {}
+        o.addProperty("dl_limit",           dlLim > 0 ? dlLim : -1);
+        o.addProperty("up_limit",           ulLim > 0 ? ulLim : -1);
         o.addProperty("eta",                stats.getETASecs() < 0 ? -1L : stats.getETASecs());
-        o.addProperty("seeding_time",       0L);
-        o.addProperty("time_elapsed",       0L);
+        long seedingTime = 0;
+        try { seedingTime = stats.getSecondsOnlySeeding(); } catch (Exception ignored) {}
+        o.addProperty("seeding_time",       seedingTime);
+        long timeElapsed = timeStarted > 0 ? (System.currentTimeMillis() - timeStarted) / 1000L : 0L;
+        o.addProperty("time_elapsed",       timeElapsed);
         o.addProperty("save_path",          savePath);
         o.addProperty("download_path",      savePath);
 
@@ -243,6 +285,27 @@ public class TorrentsHandler {
         Download dl = findByHash(HttpUtils.queryParams(exchange).get("hash"));
         if (dl == null) { HttpUtils.sendText(exchange, "Not Found", 404); return; }
 
+        // qBittorrent tracker status: 0=disabled, 1=not contacted, 2=working, 3=updating, 4=not working
+        int announceStatus = 1;
+        String announceMsg = "";
+        int numPeers = -1, numSeeds = -1, numLeeches = -1;
+        try {
+            com.biglybt.pif.download.DownloadAnnounceResult ann = dl.getLastAnnounceResult();
+            if (ann != null) {
+                if (ann.getResponseType() == com.biglybt.pif.download.DownloadAnnounceResult.RT_SUCCESS) {
+                    announceStatus = 2;
+                    numPeers   = ann.getReportedPeerCount();
+                    numSeeds   = ann.getSeedCount();
+                    numLeeches = ann.getNonSeedCount();
+                } else {
+                    announceStatus = 4;
+                    String err = ann.getError();
+                    announceMsg = err != null ? err : "";
+                }
+            }
+        } catch (Exception ignored) {}
+        if (dl.isPaused()) announceStatus = 0;
+
         JsonArray arr = new JsonArray();
         addSyntheticTracker(arr, "** [DHT] **", -1);
         addSyntheticTracker(arr, "** [PeX] **", -1);
@@ -254,12 +317,12 @@ public class TorrentsHandler {
             if (sets != null && sets.length > 0) {
                 for (int tier = 0; tier < sets.length; tier++) {
                     for (java.net.URL url : sets[tier].getURLs()) {
-                        arr.add(trackerObj(url.toString(), tier));
+                        arr.add(trackerObj(url.toString(), tier, announceStatus, numPeers, numSeeds, numLeeches, announceMsg));
                     }
                 }
             } else {
                 java.net.URL url = dl.getTorrent().getAnnounceURL();
-                if (url != null) arr.add(trackerObj(url.toString(), 0));
+                if (url != null) arr.add(trackerObj(url.toString(), 0, announceStatus, numPeers, numSeeds, numLeeches, announceMsg));
             }
         } catch (Exception ignored) {}
 
@@ -279,16 +342,16 @@ public class TorrentsHandler {
         arr.add(tr);
     }
 
-    private JsonObject trackerObj(String url, int tier) {
+    private JsonObject trackerObj(String url, int tier, int status, int numPeers, int numSeeds, int numLeeches, String msg) {
         JsonObject tr = new JsonObject();
         tr.addProperty("url",            url);
-        tr.addProperty("status",         2);
+        tr.addProperty("status",         status);
         tr.addProperty("tier",           tier);
-        tr.addProperty("num_peers",      -1);
-        tr.addProperty("num_seeds",      -1);
-        tr.addProperty("num_leeches",    -1);
+        tr.addProperty("num_peers",      numPeers);
+        tr.addProperty("num_seeds",      numSeeds);
+        tr.addProperty("num_leeches",    numLeeches);
         tr.addProperty("num_downloaded", -1);
-        tr.addProperty("msg",            "");
+        tr.addProperty("msg",            msg);
         return tr;
     }
 
@@ -297,6 +360,11 @@ public class TorrentsHandler {
     private void files(HttpExchange exchange) throws IOException {
         Download dl = findByHash(HttpUtils.queryParams(exchange).get("hash"));
         if (dl == null) { HttpUtils.sendText(exchange, "Not Found", 404); return; }
+
+        String saveDir = "";
+        try { String sd = dl.getStats().getDownloadDirectory(); if (sd != null) saveDir = sd; } catch (Exception ignored) {}
+        String basePath = saveDir.isEmpty() ? "" : new File(saveDir).getAbsolutePath();
+        if (!basePath.isEmpty() && !basePath.endsWith(File.separator)) basePath += File.separator;
 
         JsonArray arr = new JsonArray();
         try {
@@ -312,7 +380,14 @@ public class TorrentsHandler {
                 String name = "";
                 try {
                     File file = f.getFile(false);
-                    if (file != null) name = file.getName();
+                    if (file != null) {
+                        String abs = file.getAbsolutePath();
+                        if (!basePath.isEmpty() && abs.startsWith(basePath)) {
+                            name = abs.substring(basePath.length()).replace(File.separatorChar, '/');
+                        } else {
+                            name = file.getName();
+                        }
+                    }
                 } catch (Exception ignored) {}
 
                 // qBittorrent priority: 0=skip, 1=normal, 6=high, 7=max
@@ -520,7 +595,12 @@ public class TorrentsHandler {
     // ── POST /api/v2/torrents/resume ──────────────────────────────────────────
 
     private void resume(HttpExchange exchange) throws IOException {
-        forEachMatching(exchange, dl -> { try { dl.resume(); } catch (Exception ignored) {} });
+        forEachMatching(exchange, dl -> {
+            try {
+                if (dl.isPaused()) dl.resume();
+                else               dl.restart();
+            } catch (Exception ignored) {}
+        });
         HttpUtils.sendText(exchange, "Ok.");
     }
 
@@ -658,13 +738,164 @@ public class TorrentsHandler {
         HttpUtils.sendText(exchange, "Ok.");
     }
 
+    // ── GET /api/v2/torrents/pieceHashes ─────────────────────────────────────
+
+    private void pieceHashes(HttpExchange exchange) throws IOException {
+        Download dl = findByHash(HttpUtils.queryParams(exchange).get("hash"));
+        if (dl == null) { HttpUtils.sendJson(exchange, "[]"); return; }
+        JsonArray arr = new JsonArray();
+        try {
+            byte[][] pieces = dl.getTorrent().getPieces();
+            if (pieces != null) {
+                for (byte[] piece : pieces) arr.add(TorrentMapper.hashHex(piece));
+            }
+        } catch (Exception ignored) {}
+        HttpUtils.sendJson(exchange, arr.toString());
+    }
+
+    // ── POST /api/v2/torrents/toggleSequentialDownload ────────────────────────
+
+    private void toggleSequentialDownload(HttpExchange exchange) throws IOException {
+        forEachMatching(exchange, dl -> {
+            try {
+                boolean current = dl.getFlag(Download.FLAG_SEQUENTIAL_DOWNLOAD);
+                dl.setFlag(Download.FLAG_SEQUENTIAL_DOWNLOAD, !current);
+            } catch (Exception ignored) {}
+        });
+        HttpUtils.sendText(exchange, "Ok.");
+    }
+
+    // ── POST /api/v2/torrents/setForceStart ──────────────────────────────────
+
+    private void setForceStart(HttpExchange exchange) throws IOException {
+        Map<String, String> params = HttpUtils.formParams(exchange);
+        boolean value = "true".equalsIgnoreCase(params.getOrDefault("value", "false"));
+        forEachMatchingHashes(params.getOrDefault("hashes", "all"), dl -> {
+            try { dl.setForceStart(value); } catch (Exception ignored) {}
+        });
+        HttpUtils.sendText(exchange, "Ok.");
+    }
+
+    // ── GET /api/v2/torrents/webseeds ─────────────────────────────────────────
+
+    private void webseeds(HttpExchange exchange) throws IOException {
+        Download dl = findByHash(HttpUtils.queryParams(exchange).get("hash"));
+        if (dl == null) { HttpUtils.sendJson(exchange, "[]"); return; }
+        JsonArray arr = new JsonArray();
+        try {
+            Object urlList = dl.getTorrent().getAdditionalProperty("url-list");
+            java.util.List<String> urls = new java.util.ArrayList<>();
+            if (urlList instanceof byte[]) {
+                urls.add(new String((byte[]) urlList, java.nio.charset.StandardCharsets.UTF_8).trim());
+            } else if (urlList instanceof java.util.List) {
+                for (Object item : (java.util.List<?>) urlList) {
+                    if (item instanceof byte[]) urls.add(new String((byte[]) item, java.nio.charset.StandardCharsets.UTF_8).trim());
+                    else if (item instanceof String) urls.add(((String) item).trim());
+                }
+            }
+            for (String u : urls) {
+                if (!u.isEmpty()) {
+                    JsonObject seed = new JsonObject();
+                    seed.addProperty("url", u);
+                    seed.addProperty("remaining", 0L);
+                    arr.add(seed);
+                }
+            }
+        } catch (Exception ignored) {}
+        HttpUtils.sendJson(exchange, arr.toString());
+    }
+
+    // ── POST /api/v2/torrents/downloadLimit (read) ────────────────────────────
+
+    private void getDownloadLimit(HttpExchange exchange) throws IOException {
+        Map<String, String> params = HttpUtils.formParams(exchange);
+        String hashes = params.getOrDefault("hashes", "all");
+        JsonObject result = new JsonObject();
+        for (Download dl : pi.getDownloadManager().getDownloads()) {
+            if (!TorrentMapper.isUserDownload(dl)) continue;
+            String dlHash = TorrentMapper.hashHex(dl.getTorrent().getHash());
+            if (!"all".equalsIgnoreCase(hashes)) {
+                boolean match = false;
+                for (String h : hashes.split("\\|"))
+                    if (h.trim().equalsIgnoreCase(dlHash)) { match = true; break; }
+                if (!match) continue;
+            }
+            int lim = 0;
+            try { lim = dl.getDownloadRateLimitBytesPerSecond(); } catch (Exception ignored) {}
+            result.addProperty(dlHash, lim);
+        }
+        HttpUtils.sendJson(exchange, result.toString());
+    }
+
+    // ── POST /api/v2/torrents/uploadLimit (read) ──────────────────────────────
+
+    private void getUploadLimit(HttpExchange exchange) throws IOException {
+        Map<String, String> params = HttpUtils.formParams(exchange);
+        String hashes = params.getOrDefault("hashes", "all");
+        JsonObject result = new JsonObject();
+        for (Download dl : pi.getDownloadManager().getDownloads()) {
+            if (!TorrentMapper.isUserDownload(dl)) continue;
+            String dlHash = TorrentMapper.hashHex(dl.getTorrent().getHash());
+            if (!"all".equalsIgnoreCase(hashes)) {
+                boolean match = false;
+                for (String h : hashes.split("\\|"))
+                    if (h.trim().equalsIgnoreCase(dlHash)) { match = true; break; }
+                if (!match) continue;
+            }
+            int lim = 0;
+            try { lim = dl.getUploadRateLimitBytesPerSecond(); } catch (Exception ignored) {}
+            result.addProperty(dlHash, lim);
+        }
+        HttpUtils.sendJson(exchange, result.toString());
+    }
+
+    // ── POST /api/v2/torrents/setLocation ─────────────────────────────────────
+
+    private void setLocation(HttpExchange exchange) throws IOException {
+        Map<String, String> params = HttpUtils.formParams(exchange);
+        String location = params.getOrDefault("location",
+                          params.getOrDefault("savepath", "")).trim();
+        if (!location.isEmpty()) {
+            File dest = new File(location);
+            forEachMatchingHashes(params.getOrDefault("hashes", "all"), dl -> {
+                try { dl.moveDataFiles(dest); } catch (Exception ignored) {}
+            });
+        }
+        HttpUtils.sendText(exchange, "Ok.");
+    }
+
+    // ── POST /api/v2/torrents/topPrio / bottomPrio / increasePrio / decreasePrio
+
+    private void topPrio(HttpExchange exchange) throws IOException {
+        forEachMatching(exchange, dl -> { try { dl.setPosition(1); } catch (Exception ignored) {} });
+        HttpUtils.sendText(exchange, "Ok.");
+    }
+
+    private void bottomPrio(HttpExchange exchange) throws IOException {
+        forEachMatching(exchange, dl -> { try { dl.setPosition(Integer.MAX_VALUE); } catch (Exception ignored) {} });
+        HttpUtils.sendText(exchange, "Ok.");
+    }
+
+    private void increasePrio(HttpExchange exchange) throws IOException {
+        forEachMatching(exchange, dl -> {
+            try { dl.setPosition(Math.max(1, dl.getPosition() - 1)); } catch (Exception ignored) {}
+        });
+        HttpUtils.sendText(exchange, "Ok.");
+    }
+
+    private void decreasePrio(HttpExchange exchange) throws IOException {
+        forEachMatching(exchange, dl -> {
+            try { dl.setPosition(dl.getPosition() + 1); } catch (Exception ignored) {}
+        });
+        HttpUtils.sendText(exchange, "Ok.");
+    }
+
     // ── POST /api/v2/torrents/setDownloadLimit ────────────────────────────────
 
     private void setDownloadLimit(HttpExchange exchange) throws IOException {
         Map<String, String> params = HttpUtils.formParams(exchange);
-        int limit  = parseInt(params.getOrDefault("limit", "0"), 0);
-        String hashes = params.getOrDefault("hashes", "all");
-        forEachMatchingHashes(hashes, dl -> {
+        int limit = parseInt(params.getOrDefault("limit", "0"), 0);
+        forEachMatchingHashes(params.getOrDefault("hashes", "all"), dl -> {
             try { dl.setDownloadRateLimitBytesPerSecond(limit); } catch (Exception ignored) {}
         });
         HttpUtils.sendText(exchange, "Ok.");
@@ -674,12 +905,128 @@ public class TorrentsHandler {
 
     private void setUploadLimit(HttpExchange exchange) throws IOException {
         Map<String, String> params = HttpUtils.formParams(exchange);
-        int limit  = parseInt(params.getOrDefault("limit", "0"), 0);
-        String hashes = params.getOrDefault("hashes", "all");
-        forEachMatchingHashes(hashes, dl -> {
+        int limit = parseInt(params.getOrDefault("limit", "0"), 0);
+        forEachMatchingHashes(params.getOrDefault("hashes", "all"), dl -> {
             try { dl.setUploadRateLimitBytesPerSecond(limit); } catch (Exception ignored) {}
         });
         HttpUtils.sendText(exchange, "Ok.");
+    }
+
+    // ── POST /api/v2/torrents/addTrackers ────────────────────────────────────
+
+    private void addTrackers(HttpExchange exchange) throws IOException {
+        Map<String, String> params = HttpUtils.formParams(exchange);
+        Download dl = findByHash(params.get("hash"));
+        if (dl == null) { HttpUtils.sendText(exchange, "Ok."); return; }
+        String urlsParam = params.getOrDefault("urls", "").trim();
+        if (!urlsParam.isEmpty()) {
+            com.biglybt.pif.torrent.TorrentAnnounceURLList list = dl.getTorrent().getAnnounceURLList();
+            for (String line : urlsParam.split("[\r\n]+")) {
+                String url = line.trim();
+                if (url.isEmpty()) continue;
+                try { list.addSet(new java.net.URL[]{new java.net.URL(url)}); } catch (Exception ignored) {}
+            }
+        }
+        HttpUtils.sendText(exchange, "Ok.");
+    }
+
+    // ── POST /api/v2/torrents/removeTrackers ──────────────────────────────────
+
+    private void removeTrackers(HttpExchange exchange) throws IOException {
+        Map<String, String> params = HttpUtils.formParams(exchange);
+        Download dl = findByHash(params.get("hash"));
+        if (dl == null) { HttpUtils.sendText(exchange, "Ok."); return; }
+        String urlsParam = params.getOrDefault("urls", "").trim();
+        if (!urlsParam.isEmpty()) {
+            Set<String> toRemove = new HashSet<>(Arrays.asList(urlsParam.split("\\|")));
+            toRemove.removeIf(String::isEmpty);
+            try {
+                com.biglybt.pif.torrent.TorrentAnnounceURLList list = dl.getTorrent().getAnnounceURLList();
+                com.biglybt.pif.torrent.TorrentAnnounceURLListSet[] sets = list.getSets();
+                if (sets != null) {
+                    java.util.List<com.biglybt.pif.torrent.TorrentAnnounceURLListSet> kept = new java.util.ArrayList<>();
+                    for (com.biglybt.pif.torrent.TorrentAnnounceURLListSet set : sets) {
+                        boolean hasRemoved = false;
+                        for (java.net.URL u : set.getURLs()) {
+                            if (toRemove.contains(u.toString())) { hasRemoved = true; break; }
+                        }
+                        if (!hasRemoved) kept.add(set);
+                    }
+                    list.setSets(kept.toArray(new com.biglybt.pif.torrent.TorrentAnnounceURLListSet[0]));
+                }
+            } catch (Exception ignored) {}
+        }
+        HttpUtils.sendText(exchange, "Ok.");
+    }
+
+    // ── POST /api/v2/torrents/editTracker ─────────────────────────────────────
+
+    private void editTracker(HttpExchange exchange) throws IOException {
+        Map<String, String> params = HttpUtils.formParams(exchange);
+        Download dl = findByHash(params.get("hash"));
+        if (dl == null) { HttpUtils.sendText(exchange, "Ok."); return; }
+        String origUrl = params.getOrDefault("origUrl", "").trim();
+        String newUrl  = params.getOrDefault("newUrl",  "").trim();
+        if (!origUrl.isEmpty() && !newUrl.isEmpty()) {
+            try {
+                com.biglybt.pif.torrent.TorrentAnnounceURLList list = dl.getTorrent().getAnnounceURLList();
+                com.biglybt.pif.torrent.TorrentAnnounceURLListSet[] sets = list.getSets();
+                if (sets != null) {
+                    java.util.List<com.biglybt.pif.torrent.TorrentAnnounceURLListSet> kept = new java.util.ArrayList<>();
+                    for (com.biglybt.pif.torrent.TorrentAnnounceURLListSet set : sets) {
+                        boolean hasOrig = false;
+                        for (java.net.URL u : set.getURLs()) {
+                            if (u.toString().equals(origUrl)) { hasOrig = true; break; }
+                        }
+                        if (!hasOrig) kept.add(set);
+                    }
+                    list.setSets(kept.toArray(new com.biglybt.pif.torrent.TorrentAnnounceURLListSet[0]));
+                }
+                list.addSet(new java.net.URL[]{new java.net.URL(newUrl)});
+            } catch (Exception ignored) {}
+        }
+        HttpUtils.sendText(exchange, "Ok.");
+    }
+
+    // ── POST /api/v2/torrents/addPeers ────────────────────────────────────────
+
+    private void addPeers(HttpExchange exchange) throws IOException {
+        Map<String, String> params = HttpUtils.formParams(exchange);
+        String peersParam = params.getOrDefault("peers", "").trim();
+        forEachMatchingHashes(params.getOrDefault("hashes", "all"), dl -> {
+            try {
+                com.biglybt.pif.peers.PeerManager pm = dl.getPeerManager();
+                if (pm == null) return;
+                for (String peer : peersParam.split("\\|")) {
+                    peer = peer.trim();
+                    int colon = peer.lastIndexOf(':');
+                    if (colon < 0) continue;
+                    String ip = peer.substring(0, colon);
+                    try {
+                        int port = Integer.parseInt(peer.substring(colon + 1));
+                        pm.addPeer(ip, port);
+                    } catch (Exception ignored) {}
+                }
+            } catch (Exception ignored) {}
+        });
+        HttpUtils.sendText(exchange, "Ok.");
+    }
+
+    // ── GET /api/v2/torrents/exportTorrent ────────────────────────────────────
+
+    private void exportTorrent(HttpExchange exchange) throws IOException {
+        Download dl = findByHash(HttpUtils.queryParams(exchange).get("hash"));
+        if (dl == null) { HttpUtils.sendText(exchange, "Not Found", 404); return; }
+        try {
+            byte[] data = dl.getTorrent().writeToBEncodedData();
+            String filename = dl.getTorrent().getName() + ".torrent";
+            exchange.getResponseHeaders().set("Content-Type", "application/x-bittorrent");
+            exchange.getResponseHeaders().set("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+            exchange.sendResponseHeaders(200, data.length);
+            try (var out = exchange.getResponseBody()) { out.write(data); }
+        } catch (Exception e) {
+            HttpUtils.sendText(exchange, "Error", 500);
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

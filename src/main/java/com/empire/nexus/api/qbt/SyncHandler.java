@@ -155,8 +155,7 @@ public class SyncHandler {
             freeSpace = new java.io.File(savePath).getFreeSpace();
         } catch (Exception ignored) {}
 
-        // All-time totals — BiglyBT plugin API doesn't expose these directly,
-        // so we use the current session totals as a best-effort approximation.
+        // All-time totals
         long alltimeDl = dlData, alltimeUl = ulData;
         try {
             alltimeDl = pi.getDownloadManager().getStats().getOverallDataBytesReceived();
@@ -164,6 +163,17 @@ public class SyncHandler {
         } catch (Exception ignored) {}
 
         double globalRatio = (alltimeDl > 0) ? (double) alltimeUl / alltimeDl : 0.0;
+
+        // Global rate limits (bytes/sec, 0 = unlimited)
+        long dlRateLimit = 0, ulRateLimit = 0;
+        try {
+            long kb = pi.getPluginconfig().getCoreLongParameter(com.biglybt.pif.PluginConfig.CORE_PARAM_LONG_MAX_DOWNLOAD_SPEED_KBYTES_PER_SEC);
+            dlRateLimit = kb > 0 ? kb * 1024L : 0L;
+        } catch (Exception ignored) {}
+        try {
+            long kb = pi.getPluginconfig().getCoreLongParameter(com.biglybt.pif.PluginConfig.CORE_PARAM_LONG_MAX_UPLOAD_SPEED_KBYTES_PER_SEC);
+            ulRateLimit = kb > 0 ? kb * 1024L : 0L;
+        } catch (Exception ignored) {}
 
         JsonObject s = new JsonObject();
 
@@ -175,15 +185,15 @@ public class SyncHandler {
         // Current session speeds
         s.addProperty("dl_info_speed",            dlSpeed);
         s.addProperty("dl_info_data",             dlData);
-        s.addProperty("dl_rate_limit",            0L);
+        s.addProperty("dl_rate_limit",            dlRateLimit);
         s.addProperty("up_info_speed",            ulSpeed);
         s.addProperty("up_info_data",             ulData);
-        s.addProperty("up_rate_limit",            0L);
+        s.addProperty("up_rate_limit",            ulRateLimit);
 
         // All-time
         s.addProperty("alltime_dl",               alltimeDl);
         s.addProperty("alltime_ul",               alltimeUl);
-        s.addProperty("global_ratio",             String.format("%.2f", globalRatio));
+        s.addProperty("global_ratio",             globalRatio);
         s.addProperty("total_wasted_session",     0L);
 
         // Disk

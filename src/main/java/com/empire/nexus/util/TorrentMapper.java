@@ -9,6 +9,7 @@ import com.biglybt.pif.peers.PeerManager;
 import com.biglybt.pif.peers.PeerStats;
 import com.biglybt.pif.torrent.Torrent;
 import com.biglybt.pif.torrent.TorrentAttribute;
+import com.biglybt.pifimpl.local.PluginCoreUtils;
 import com.google.gson.JsonObject;
 
 /**
@@ -36,6 +37,17 @@ public final class TorrentMapper {
     }
 
     public static TorrentAttribute getTagsAttr() { return tagsAttr; }
+
+    /** Unwrap plugin Download to internal DownloadManagerState for deeper access. Returns null on failure. */
+    public static com.biglybt.core.download.DownloadManagerState getDownloadState(Download dl) {
+        try {
+            com.biglybt.core.download.DownloadManager dm =
+                (com.biglybt.core.download.DownloadManager) PluginCoreUtils.unwrap(dl);
+            return dm == null ? null : dm.getDownloadState();
+        } catch (Exception e) {
+            return null;
+        }
+    }
 
     /**
      * Returns true if this download should be visible in the UI.
@@ -112,8 +124,17 @@ public final class TorrentMapper {
         try { timeStarted = stats.getTimeStarted(); } catch (Exception ignored) {}
 
         long nowSecs  = System.currentTimeMillis() / 1000L;
-        long addedOn  = timeStarted > 0 ? timeStarted / 1000L : 0L;
-        long timeActive = timeStarted > 0 ? nowSecs - addedOn : 0L;
+
+        // Use internal API for real addition time; fall back to session start time
+        long addedOn = 0;
+        com.biglybt.core.download.DownloadManagerState dms = getDownloadState(dl);
+        if (dms != null) {
+            long t = dms.getLongParameter(com.biglybt.core.download.DownloadManagerState.PARAM_DOWNLOAD_ADDED_TIME);
+            if (t > 0) addedOn = t / 1000L;
+        }
+        if (addedOn <= 0 && timeStarted > 0) addedOn = timeStarted / 1000L;
+
+        long timeActive = addedOn > 0 ? nowSecs - addedOn : 0L;
 
         o.addProperty("added_on",      addedOn);
         o.addProperty("last_activity", nowSecs);
@@ -122,11 +143,23 @@ public final class TorrentMapper {
         long seedingTime = 0;
         try { seedingTime = stats.getSecondsOnlySeeding(); } catch (Exception ignored) {}
         o.addProperty("seeding_time",   seedingTime);
-        o.addProperty("completion_on",  progress >= 1.0f ? nowSecs : 0L);
+        // Use internal API for real completion time; fall back to seeding start time
+        long completionOn = 0;
+        if (dms != null) {
+            long t = dms.getLongParameter(com.biglybt.core.download.DownloadManagerState.PARAM_DOWNLOAD_COMPLETED_TIME);
+            if (t > 0) completionOn = t / 1000L;
+        }
+        if (completionOn <= 0) {
+            try {
+                long st = stats.getTimeStartedSeeding();
+                if (st > 0) completionOn = st / 1000L;
+            } catch (Exception ignored) {}
+        }
+        o.addProperty("completion_on", completionOn);
 
         // ── State ────────────────────────────────────────────────────────────
         o.addProperty("state",         toQbtState(dl));
-        o.addProperty("force_start",   false);
+        o.addProperty("force_start",   dl.isForceStart());
         o.addProperty("super_seeding", false);
 
         // ── Peers / seeds (connected) ─────────────────────────────────────────
@@ -227,6 +260,10 @@ public final class TorrentMapper {
         String comment = "";
         try { comment = torrent.getComment(); } catch (Exception ignored) {}
         o.addProperty("comment", comment);
+
+        String createdBy = "";
+        try { createdBy = torrent.getCreatedBy(); } catch (Exception ignored) {}
+        o.addProperty("created_by", createdBy != null ? createdBy : "");
 
         boolean isPrivate = false;
         try { isPrivate = torrent.isPrivate(); } catch (Exception ignored) {}
@@ -383,12 +420,20 @@ public final class TorrentMapper {
 
     private static String toQbtState(Download dl) {
         boolean paused = dl.isPaused();
+        long dlSpeed = 0, ulSpeed = 0;
+        try { dlSpeed = dl.getStats().getDownloadAverage(); } catch (Exception ignored) {}
+        try { ulSpeed = dl.getStats().getUploadAverage();   } catch (Exception ignored) {}
+        boolean complete = false;
+        try { complete = dl.getStats().getCompleted() >= 1000; } catch (Exception ignored) {}
+
         switch (dl.getState()) {
-            case Download.ST_DOWNLOADING: return paused ? "pausedDL" : "downloading";
-            case Download.ST_SEEDING:     return paused ? "pausedUP" : "uploading";
-            case Download.ST_STOPPED:     return paused ? "pausedDL" : "stalledDL";
-            case Download.ST_QUEUED:      return "queuedDL";
-            case Download.ST_WAITING:     return "queuedDL";
+            case Download.ST_DOWNLOADING: return paused ? "pausedDL"  : (dlSpeed > 0 ? "downloading" : "stalledDL");
+            case Download.ST_SEEDING:     return paused ? "pausedUP"  : (ulSpeed > 0 ? "uploading"   : "stalledUP");
+            case Download.ST_STOPPED:     return paused ? (complete ? "pausedUP" : "pausedDL")
+                                                        : (complete ? "stalledUP" : "stalledDL");
+            case Download.ST_QUEUED:
+            case Download.ST_WAITING:     return complete ? "queuedUP" : "queuedDL";
+            case Download.ST_READY:       return complete ? "queuedUP" : "queuedDL";
             case Download.ST_PREPARING:   return "checkingDL";
             case Download.ST_ERROR:       return "error";
             default:                      return "unknown";
