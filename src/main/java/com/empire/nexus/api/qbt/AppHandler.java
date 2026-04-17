@@ -287,26 +287,43 @@ public class AppHandler {
     // ── POST /api/v2/app/setPreferences ──────────────────────────────────────
 
     private void setPreferences(HttpExchange exchange) throws IOException {
-        // Parse the JSON body and apply recognized fields to BiglyBT config.
-        // The web UI sends a JSON object (not form params) for this endpoint.
+        // qBittorrent API: POST body is form-encoded with a single "json" field
+        // containing the preferences as a JSON object string.
         try {
-            String body = new String(exchange.getRequestBody().readAllBytes(),
-                    java.nio.charset.StandardCharsets.UTF_8).trim();
-            if (!body.isEmpty()) {
-                com.google.gson.JsonObject prefs =
-                        com.google.gson.JsonParser.parseString(body).getAsJsonObject();
-                PluginConfig cfg = pi.getPluginconfig();
+            Map<String, String> params = HttpUtils.formParams(exchange);
+            String jsonStr = params.getOrDefault("json", "").trim();
+            if (jsonStr.isEmpty()) {
+                HttpUtils.sendText(exchange, "Ok.");
+                return;
+            }
+            com.google.gson.JsonObject prefs =
+                    com.google.gson.JsonParser.parseString(jsonStr).getAsJsonObject();
+            PluginConfig cfg = pi.getPluginconfig();
 
-                if (prefs.has("dl_limit")) {
-                    long bps = prefs.get("dl_limit").getAsLong();
-                    cfg.setCoreLongParameter(PluginConfig.CORE_PARAM_LONG_MAX_DOWNLOAD_SPEED_KBYTES_PER_SEC,
-                            bps > 0 ? bps / 1024L : 0L);
+            if (prefs.has("dl_limit")) {
+                long bps = prefs.get("dl_limit").getAsLong();
+                // -1 or 0 both mean unlimited in the qBittorrent API
+                cfg.setCoreLongParameter(PluginConfig.CORE_PARAM_LONG_MAX_DOWNLOAD_SPEED_KBYTES_PER_SEC,
+                        bps > 0 ? bps / 1024L : 0L);
+            }
+            if (prefs.has("up_limit")) {
+                long bps = prefs.get("up_limit").getAsLong();
+                cfg.setCoreLongParameter(PluginConfig.CORE_PARAM_LONG_MAX_UPLOAD_SPEED_KBYTES_PER_SEC,
+                        bps > 0 ? bps / 1024L : 0L);
+            }
+            if (prefs.has("save_path")) {
+                String sp = prefs.get("save_path").getAsString().trim();
+                if (!sp.isEmpty()) {
+                    cfg.setCoreStringParameter(PluginConfig.CORE_PARAM_STRING_DEFAULT_SAVE_PATH, sp);
                 }
-                if (prefs.has("up_limit")) {
-                    long bps = prefs.get("up_limit").getAsLong();
-                    cfg.setCoreLongParameter(PluginConfig.CORE_PARAM_LONG_MAX_UPLOAD_SPEED_KBYTES_PER_SEC,
-                            bps > 0 ? bps / 1024L : 0L);
-                }
+            }
+            if (prefs.has("max_connec")) {
+                int v = prefs.get("max_connec").getAsInt();
+                if (v >= 0) cfg.setCoreIntParameter(PluginConfig.CORE_PARAM_INT_MAX_CONNECTIONS_GLOBAL, v);
+            }
+            if (prefs.has("max_connec_per_torrent")) {
+                int v = prefs.get("max_connec_per_torrent").getAsInt();
+                if (v >= 0) cfg.setCoreIntParameter(PluginConfig.CORE_PARAM_INT_MAX_CONNECTIONS_PER_TORRENT, v);
             }
         } catch (Exception ignored) {}
         HttpUtils.sendText(exchange, "Ok.");

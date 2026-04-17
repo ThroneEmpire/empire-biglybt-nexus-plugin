@@ -4,7 +4,7 @@ import com.biglybt.pif.PluginInterface;
 import com.biglybt.pif.disk.DiskManagerFileInfo;
 import com.biglybt.pif.download.Download;
 import com.biglybt.pif.torrent.Torrent;
-import com.biglybt.pif.torrent.TorrentAttribute;
+
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.empire.nexus.http.HttpUtils;
@@ -17,7 +17,6 @@ import java.io.IOException;
 import java.net.URL;
 import java.util.Arrays;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -429,18 +428,11 @@ public class TorrentsHandler {
 
     private void categories(HttpExchange exchange) throws IOException {
         JsonObject cats = new JsonObject();
-        Set<String> seen = new HashSet<>();
-        for (Download dl : pi.getDownloadManager().getDownloads()) {
-            if (!TorrentMapper.isUserDownload(dl)) continue;
-            try {
-                String cat = dl.getCategoryName();
-                if (cat != null && !cat.isEmpty() && seen.add(cat)) {
-                    JsonObject obj = new JsonObject();
-                    obj.addProperty("name",     cat);
-                    obj.addProperty("savePath", "");
-                    cats.add(cat, obj);
-                }
-            } catch (Exception ignored) {}
+        for (com.biglybt.core.category.Category c : TorrentMapper.getUserCategories()) {
+            JsonObject obj = new JsonObject();
+            obj.addProperty("name",     c.getName());
+            obj.addProperty("savePath", "");
+            cats.add(c.getName(), obj);
         }
         HttpUtils.sendJson(exchange, cats.toString());
     }
@@ -449,21 +441,7 @@ public class TorrentsHandler {
 
     private void tags(HttpExchange exchange) throws IOException {
         JsonArray arr = new JsonArray();
-        Set<String> seen = new HashSet<>();
-        TorrentAttribute attr = TorrentMapper.getTagsAttr();
-        if (attr == null) { HttpUtils.sendJson(exchange, arr.toString()); return; }
-
-        for (Download dl : pi.getDownloadManager().getDownloads()) {
-            if (!TorrentMapper.isUserDownload(dl)) continue;
-            try {
-                String[] stored = dl.getListAttribute(attr);
-                if (stored != null) {
-                    for (String t : stored) {
-                        if (t != null && !t.isEmpty() && seen.add(t)) arr.add(t);
-                    }
-                }
-            } catch (Exception ignored) {}
-        }
+        TorrentMapper.getAllUserTags().forEach(arr::add);
         HttpUtils.sendJson(exchange, arr.toString());
     }
 
@@ -572,17 +550,8 @@ public class TorrentsHandler {
         if (!category.isEmpty()) {
             try { dl.setCategory(category); } catch (Exception ignored) {}
         }
-        String tagsParam = params.getOrDefault("tags", "").trim();
-        if (!tagsParam.isEmpty()) {
-            TorrentAttribute attr = TorrentMapper.getTagsAttr();
-            if (attr != null) {
-                try {
-                    String[] newTags = Arrays.stream(tagsParam.split(","))
-                            .map(String::trim).filter(t -> !t.isEmpty()).toArray(String[]::new);
-                    dl.setListAttribute(attr, newTags);
-                } catch (Exception ignored) {}
-            }
-        }
+        List<String> newTags = parseCsv(params.getOrDefault("tags", "").trim());
+        if (!newTags.isEmpty()) TorrentMapper.addTagsToDownload(dl, newTags);
     }
 
     // ── POST /api/v2/torrents/pause ───────────────────────────────────────────
@@ -691,50 +660,22 @@ public class TorrentsHandler {
     // ── POST /api/v2/torrents/addTags ─────────────────────────────────────────
 
     private void addTags(HttpExchange exchange) throws IOException {
-        TorrentAttribute attr = TorrentMapper.getTagsAttr();
         Map<String, String> params = HttpUtils.formParams(exchange);
-        String hashes   = params.getOrDefault("hashes", "");
-        String tagsParam = params.getOrDefault("tags", "").trim();
-
-        if (attr == null || tagsParam.isEmpty()) { HttpUtils.sendText(exchange, "Ok."); return; }
-
-        String[] toAdd = Arrays.stream(tagsParam.split(","))
-                .map(String::trim).filter(t -> !t.isEmpty()).toArray(String[]::new);
-
-        forEachMatchingHashes(hashes, dl -> {
-            try {
-                String[] existing = dl.getListAttribute(attr);
-                LinkedHashSet<String> set = new LinkedHashSet<>();
-                if (existing != null) set.addAll(Arrays.asList(existing));
-                set.addAll(Arrays.asList(toAdd));
-                dl.setListAttribute(attr, set.toArray(new String[0]));
-            } catch (Exception ignored) {}
-        });
+        List<String> toAdd = parseCsv(params.getOrDefault("tags", "").trim());
+        if (toAdd.isEmpty()) { HttpUtils.sendText(exchange, "Ok."); return; }
+        forEachMatchingHashes(params.getOrDefault("hashes", ""),
+                dl -> TorrentMapper.addTagsToDownload(dl, toAdd));
         HttpUtils.sendText(exchange, "Ok.");
     }
 
     // ── POST /api/v2/torrents/removeTags ──────────────────────────────────────
 
     private void removeTags(HttpExchange exchange) throws IOException {
-        TorrentAttribute attr = TorrentMapper.getTagsAttr();
         Map<String, String> params = HttpUtils.formParams(exchange);
-        String hashes    = params.getOrDefault("hashes", "");
-        String tagsParam = params.getOrDefault("tags", "").trim();
-
-        if (attr == null || tagsParam.isEmpty()) { HttpUtils.sendText(exchange, "Ok."); return; }
-
-        Set<String> toRemove = new HashSet<>(Arrays.asList(tagsParam.split(",")));
-        toRemove.removeIf(String::isEmpty);
-
-        forEachMatchingHashes(hashes, dl -> {
-            try {
-                String[] existing = dl.getListAttribute(attr);
-                if (existing == null) return;
-                LinkedHashSet<String> set = new LinkedHashSet<>(Arrays.asList(existing));
-                set.removeAll(toRemove);
-                dl.setListAttribute(attr, set.toArray(new String[0]));
-            } catch (Exception ignored) {}
-        });
+        List<String> toRemove = parseCsv(params.getOrDefault("tags", "").trim());
+        if (toRemove.isEmpty()) { HttpUtils.sendText(exchange, "Ok."); return; }
+        forEachMatchingHashes(params.getOrDefault("hashes", ""),
+                dl -> TorrentMapper.removeTagsFromDownload(dl, toRemove));
         HttpUtils.sendText(exchange, "Ok.");
     }
 
@@ -1069,5 +1010,12 @@ public class TorrentsHandler {
 
     private static int parseInt(String s, int def) {
         try { return Integer.parseInt(s); } catch (Exception e) { return def; }
+    }
+
+    private static List<String> parseCsv(String s) {
+        if (s == null || s.isEmpty()) return java.util.Collections.emptyList();
+        return Arrays.stream(s.split(","))
+                .map(String::trim).filter(t -> !t.isEmpty())
+                .collect(java.util.stream.Collectors.toList());
     }
 }

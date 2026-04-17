@@ -8,7 +8,6 @@ import com.biglybt.pif.peers.Peer;
 import com.biglybt.pif.peers.PeerManager;
 import com.biglybt.pif.peers.PeerStats;
 import com.biglybt.pif.torrent.Torrent;
-import com.biglybt.pif.torrent.TorrentAttribute;
 import com.biglybt.pifimpl.local.PluginCoreUtils;
 import com.google.gson.JsonObject;
 
@@ -24,19 +23,98 @@ import com.google.gson.JsonObject;
  */
 public final class TorrentMapper {
 
-    /** Plugin attribute used to persist tags per download. */
-    private static TorrentAttribute tagsAttr;
-
     private TorrentMapper() {}
 
-    /** Must be called once from NexusPlugin.initialize() before the server starts. */
-    public static void init(PluginInterface pi) {
+    public static void init(PluginInterface pi) {}
+
+    private static com.biglybt.core.tag.TagType manualTagType() {
         try {
-            tagsAttr = pi.getTorrentManager().getPluginAttribute("nexus.tags");
-        } catch (Exception ignored) {}
+            return com.biglybt.core.tag.TagManagerFactory.getTagManager()
+                    .getTagType(com.biglybt.core.tag.TagType.TT_DOWNLOAD_MANUAL);
+        } catch (Exception ignored) { return null; }
     }
 
-    public static TorrentAttribute getTagsAttr() { return tagsAttr; }
+    private static com.biglybt.core.download.DownloadManager unwrap(Download dl) {
+        try { return (com.biglybt.core.download.DownloadManager) PluginCoreUtils.unwrap(dl); }
+        catch (Exception ignored) { return null; }
+    }
+
+    public static java.util.Set<String> getNativeTags(Download dl) {
+        java.util.Set<String> result = new java.util.LinkedHashSet<>();
+        com.biglybt.core.download.DownloadManager dm = unwrap(dl);
+        if (dm == null) return result;
+        try {
+            java.util.List<com.biglybt.core.tag.Tag> tags =
+                    com.biglybt.core.tag.TagManagerFactory.getTagManager()
+                            .getTagsForTaggable(com.biglybt.core.tag.TagType.TT_DOWNLOAD_MANUAL, dm);
+            if (tags != null) for (com.biglybt.core.tag.Tag tag : tags) result.add(tag.getTagName(true));
+        } catch (Exception ignored) {}
+        return result;
+    }
+
+    public static java.util.Set<String> getAllUserTags() {
+        java.util.Set<String> result = new java.util.LinkedHashSet<>();
+        com.biglybt.core.tag.TagType tt = manualTagType();
+        if (tt != null) for (com.biglybt.core.tag.Tag tag : tt.getTags()) result.add(tag.getTagName(true));
+        return result;
+    }
+
+    public static void addTagsToDownload(Download dl, java.util.Collection<String> tagNames) {
+        com.biglybt.core.download.DownloadManager dm = unwrap(dl);
+        com.biglybt.core.tag.TagType tt = manualTagType();
+        if (dm == null || tt == null) return;
+        for (String name : tagNames) {
+            if (name == null || name.isEmpty()) continue;
+            try {
+                com.biglybt.core.tag.Tag tag = tt.getTag(name, true);
+                if (tag == null) tag = tt.createTag(name, true);
+                if (tag != null && !tag.hasTaggable(dm)) tag.addTaggable(dm);
+            } catch (Exception ignored) {}
+        }
+    }
+
+    public static void removeTagsFromDownload(Download dl, java.util.Collection<String> tagNames) {
+        com.biglybt.core.download.DownloadManager dm = unwrap(dl);
+        com.biglybt.core.tag.TagType tt = manualTagType();
+        if (dm == null || tt == null) return;
+        for (String name : tagNames) {
+            if (name == null || name.isEmpty()) continue;
+            try {
+                com.biglybt.core.tag.Tag tag = tt.getTag(name, true);
+                if (tag != null && tag.hasTaggable(dm)) tag.removeTaggable(dm);
+            } catch (Exception ignored) {}
+        }
+    }
+
+    /**
+     * Returns true if {@code name} is a user-defined category in BiglyBT.
+     * Uses the internal CategoryManager as the authoritative source; the string
+     * prefix check is a fallback for when the internal API is unavailable.
+     */
+    public static boolean isUserCategory(String name) {
+        if (name == null || name.isEmpty()) return false;
+        if (name.startsWith("Categories.")) return false;
+        try {
+            com.biglybt.core.category.Category cat =
+                    com.biglybt.core.category.CategoryManager.getCategory(name);
+            return cat != null && cat.getType() == com.biglybt.core.category.Category.TYPE_USER;
+        } catch (Exception ignored) {}
+        return true; // if internal API unavailable, trust non-prefixed name
+    }
+
+    public static com.biglybt.core.category.Category[] getUserCategories() {
+        try {
+            com.biglybt.core.category.Category[] all =
+                    com.biglybt.core.category.CategoryManager.getCategories();
+            if (all == null) return new com.biglybt.core.category.Category[0];
+            java.util.List<com.biglybt.core.category.Category> result = new java.util.ArrayList<>(all.length);
+            for (com.biglybt.core.category.Category c : all)
+                if (c.getType() == com.biglybt.core.category.Category.TYPE_USER) result.add(c);
+            return result.toArray(new com.biglybt.core.category.Category[0]);
+        } catch (Exception ignored) {
+            return new com.biglybt.core.category.Category[0];
+        }
+    }
 
     /** Unwrap plugin Download to internal DownloadManagerState for deeper access. Returns null on failure. */
     public static com.biglybt.core.download.DownloadManagerState getDownloadState(Download dl) {
@@ -232,29 +310,13 @@ public final class TorrentMapper {
         o.addProperty("download_path", savePath);
 
         // ── Category ─────────────────────────────────────────────────────────
-        // "Categories.*" are BiglyBT's internal i18n keys (e.g. "Categories.uncategorized"),
-        // not real user-defined categories — map those to empty string.
         String category = "";
         try { category = dl.getCategoryName(); } catch (Exception ignored) {}
-        if (category == null || category.startsWith("Categories.")) category = "";
+        if (!isUserCategory(category)) category = "";
         o.addProperty("category", category);
 
         // ── Tags ──────────────────────────────────────────────────────────────
-        // Only use our plugin attribute — BiglyBT's native Tag system contains
-        // internal auto-tags ("All", "Seeding", "Complete", etc.) that must not
-        // be exposed as qBittorrent tags.
-        String tags = "";
-        try {
-            if (tagsAttr != null) {
-                String[] stored = dl.getListAttribute(tagsAttr);
-                if (stored != null && stored.length > 0) {
-                    tags = String.join(",", java.util.Arrays.stream(stored)
-                            .filter(t -> t != null && !t.isEmpty())
-                            .toArray(String[]::new));
-                }
-            }
-        } catch (Exception ignored) {}
-        o.addProperty("tags", tags);
+        o.addProperty("tags", String.join(",", getNativeTags(dl)));
 
         // ── Torrent metadata ──────────────────────────────────────────────────
         String comment = "";

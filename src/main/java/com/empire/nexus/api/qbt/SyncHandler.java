@@ -1,14 +1,16 @@
 package com.empire.nexus.api.qbt;
 
 import java.io.IOException;
-import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.biglybt.pif.PluginInterface;
 import com.biglybt.pif.download.Download;
 import com.biglybt.pif.download.DownloadStats;
-import com.biglybt.pif.torrent.TorrentAttribute;
+
 import com.empire.nexus.http.HttpUtils;
 import com.empire.nexus.util.TorrentMapper;
 import com.google.gson.JsonArray;
@@ -16,17 +18,31 @@ import com.google.gson.JsonObject;
 import com.sun.net.httpserver.HttpExchange;
 
 /**
- * GET /api/v2/sync/maindata?rid=0
+ * GET /api/v2/sync/maindata?rid=N
  *
- * The web UI polls this every few seconds for incremental updates.
- * The rid (response ID) lets the server send only changed data after the
- * first full snapshot.  We always return a full snapshot for now — this is
- * spec-compliant because the client must handle full_update:true at any time.
+ * On the first request (rid=0) or whenever the client's rid doesn't match our
+ * last-sent rid, we return a full snapshot with full_update=true.  On every
+ * subsequent request with a matching rid we compute a diff: only changed/new
+ * torrents, newly added/removed categories and tags.
+ *
+ * Fields that change every second on idle torrents (last_activity, time_active,
+ * seeding_time) are excluded from the change-detection comparison so that
+ * finished, idle torrents don't flood every incremental response.
  */
 public class SyncHandler {
 
     private final PluginInterface pi;
     private final AtomicLong ridCounter = new AtomicLong(1);
+
+    // All mutable sync state is protected by stateLock.
+    private final Object stateLock = new Object();
+    private long lastSentRid = 0;
+    private final Map<String, String>     lastTorrentSnapshots = new LinkedHashMap<>();
+    private final Map<String, JsonObject> lastCategoryObjects  = new LinkedHashMap<>();
+    private final Set<String>             lastTags             = new LinkedHashSet<>();
+
+    private volatile long cachedFreeSpace = 0;
+    private volatile long cachedFreeSpaceAt = 0;
 
     public SyncHandler(PluginInterface pi) {
         this.pi = pi;
@@ -34,26 +50,27 @@ public class SyncHandler {
 
     public void handle(HttpExchange exchange) throws IOException {
         switch (HttpUtils.pathSegment(exchange)) {
-            case "maindata"    -> maindata(exchange);
+            case "maindata"     -> maindata(exchange);
             case "torrentPeers" -> torrentPeers(exchange);
-            default            -> HttpUtils.sendText(exchange, "Not Found", 404);
+            default             -> HttpUtils.sendText(exchange, "Not Found", 404);
         }
     }
 
     // ── GET /api/v2/sync/maindata ─────────────────────────────────────────────
 
     private void maindata(HttpExchange exchange) throws IOException {
-        long newRid = ridCounter.getAndIncrement();
-        Download[] downloads = pi.getDownloadManager().getDownloads();
+        int clientRid = parseInt(HttpUtils.queryParams(exchange).getOrDefault("rid", "0"));
 
-        // ── Torrents ──────────────────────────────────────────────────────────
-        JsonObject torrents = new JsonObject();
+        Download[] downloads = pi.getDownloadManager().getDownloads();
+        Map<String, JsonObject> currentTorrents   = new LinkedHashMap<>();
+        Map<String, JsonObject> currentCategories = new LinkedHashMap<>();
         long dlSpeed = 0, ulSpeed = 0, dlData = 0, ulData = 0, peers = 0;
 
         for (Download dl : downloads) {
             if (!TorrentMapper.isUserDownload(dl)) continue;
+
             String hash = TorrentMapper.hashHex(dl.getTorrent().getHash());
-            torrents.add(hash, TorrentMapper.toQbtInfo(dl));
+            currentTorrents.put(hash, TorrentMapper.toQbtInfo(dl));
 
             DownloadStats s = dl.getStats();
             dlSpeed += s.getDownloadAverage();
@@ -66,57 +83,107 @@ public class SyncHandler {
             } catch (Exception ignored) {}
         }
 
-        // ── Server state ──────────────────────────────────────────────────────
-        JsonObject state = buildServerState(dlSpeed, ulSpeed, dlData, ulData, peers);
+        Set<String> currentTags = TorrentMapper.getAllUserTags();
 
-        // ── Categories ────────────────────────────────────────────────────────
-        JsonObject categories = new JsonObject();
-        Set<String> catSeen = new HashSet<>();
-        for (Download dl : downloads) {
-            if (!TorrentMapper.isUserDownload(dl)) continue;
-            try {
-                String cat = dl.getCategoryName();
-                if (cat != null && !cat.isEmpty() && catSeen.add(cat)) {
-                    JsonObject catObj = new JsonObject();
-                    catObj.addProperty("name",     cat);
-                    catObj.addProperty("savePath", "");
-                    categories.add(cat, catObj);
-                }
-            } catch (Exception ignored) {}
+        for (com.biglybt.core.category.Category c : TorrentMapper.getUserCategories()) {
+            JsonObject catObj = new JsonObject();
+            catObj.addProperty("name",     c.getName());
+            catObj.addProperty("savePath", "");
+            currentCategories.put(c.getName(), catObj);
         }
 
-        // ── Tags ──────────────────────────────────────────────────────────────
-        JsonArray tagsArr = new JsonArray();
-        Set<String> tagSeen = new HashSet<>();
-        TorrentAttribute tagsAttr = TorrentMapper.getTagsAttr();
-        if (tagsAttr != null) {
-            for (Download dl : downloads) {
-                if (!TorrentMapper.isUserDownload(dl)) continue;
-                try {
-                    String[] stored = dl.getListAttribute(tagsAttr);
-                    if (stored != null) {
-                        for (String t : stored) {
-                            if (t != null && !t.isEmpty() && tagSeen.add(t)) tagsArr.add(t);
-                        }
-                    }
-                } catch (Exception ignored) {}
+        JsonObject serverState = buildServerState(dlSpeed, ulSpeed, dlData, ulData, peers);
+
+        Map<String, String> newSnapshots = new LinkedHashMap<>(currentTorrents.size());
+        currentTorrents.forEach((h, info) -> newSnapshots.put(h, stableSnapshot(info)));
+
+        String response;
+        synchronized (stateLock) {
+            boolean fullUpdate = (clientRid == 0 || clientRid != lastSentRid);
+            long newRid = ridCounter.getAndIncrement();
+
+            JsonObject root = new JsonObject();
+            root.addProperty("rid",         newRid);
+            root.addProperty("full_update", fullUpdate);
+
+            if (fullUpdate) {
+                JsonObject torrentsObj = new JsonObject();
+                currentTorrents.forEach(torrentsObj::add);
+                root.add("torrents",           torrentsObj);
+                root.add("torrents_removed",   new JsonArray());
+
+                JsonObject catsObj = new JsonObject();
+                currentCategories.forEach(catsObj::add);
+                root.add("categories",         catsObj);
+                root.add("categories_removed", new JsonArray());
+
+                JsonArray tagsArr = new JsonArray();
+                currentTags.forEach(tagsArr::add);
+                root.add("tags",               tagsArr);
+                root.add("tags_removed",       new JsonArray());
+
+            } else {
+                JsonObject changedTorrents = new JsonObject();
+                JsonArray  removedTorrents = new JsonArray();
+                newSnapshots.forEach((hash, snap) -> {
+                    if (!snap.equals(lastTorrentSnapshots.get(hash)))
+                        changedTorrents.add(hash, currentTorrents.get(hash));
+                });
+                lastTorrentSnapshots.keySet().stream()
+                        .filter(h -> !currentTorrents.containsKey(h))
+                        .forEach(removedTorrents::add);
+                root.add("torrents",         changedTorrents);
+                root.add("torrents_removed", removedTorrents);
+
+                JsonObject changedCats = new JsonObject();
+                JsonArray  removedCats = new JsonArray();
+                currentCategories.forEach((k, v) -> {
+                    JsonObject prev = lastCategoryObjects.get(k);
+                    if (prev == null || !prev.equals(v)) changedCats.add(k, v);
+                });
+                lastCategoryObjects.keySet().stream()
+                        .filter(k -> !currentCategories.containsKey(k))
+                        .forEach(removedCats::add);
+                root.add("categories",         changedCats);
+                root.add("categories_removed", removedCats);
+
+                JsonArray newTagsArr    = new JsonArray();
+                JsonArray removedTagsArr = new JsonArray();
+                currentTags.stream().filter(t -> !lastTags.contains(t)).forEach(newTagsArr::add);
+                lastTags.stream().filter(t -> !currentTags.contains(t)).forEach(removedTagsArr::add);
+                root.add("tags",         newTagsArr);
+                root.add("tags_removed", removedTagsArr);
             }
+
+            root.add("trackers",     new JsonObject());
+            root.add("server_state", serverState);
+
+            lastTorrentSnapshots.clear();
+            lastTorrentSnapshots.putAll(newSnapshots);
+            lastCategoryObjects.clear();
+            lastCategoryObjects.putAll(currentCategories);
+            lastTags.clear();
+            lastTags.addAll(currentTags);
+            lastSentRid = newRid;
+
+            response = root.toString();
         }
 
-        // ── Root ──────────────────────────────────────────────────────────────
-        JsonObject root = new JsonObject();
-        root.addProperty("rid",         newRid);
-        root.addProperty("full_update", true);
-        root.add("torrents",            torrents);
-        root.add("torrents_removed",    new JsonArray());
-        root.add("categories",          categories);
-        root.add("categories_removed",  new JsonArray());
-        root.add("tags",                tagsArr);
-        root.add("tags_removed",        new JsonArray());
-        root.add("trackers",            new JsonObject());
-        root.add("server_state",        state);
+        HttpUtils.sendJson(exchange, response);
+    }
 
-        HttpUtils.sendJson(exchange, root.toString());
+    // Strips fields that tick every second on idle torrents so they don't appear
+    // in every incremental diff. Mutates and restores the input object to avoid
+    // the per-poll deepCopy cost.
+    private static String stableSnapshot(JsonObject obj) {
+        com.google.gson.JsonElement la = obj.remove("last_activity");
+        com.google.gson.JsonElement ta = obj.remove("time_active");
+        com.google.gson.JsonElement st = obj.remove("seeding_time");
+        String s = obj.toString();
+        if (la != null) obj.add("last_activity", la);
+        if (ta != null) obj.add("time_active",   ta);
+        if (st != null) obj.add("seeding_time",  st);
+        return s;
     }
 
     // ── GET /api/v2/sync/torrentPeers?hash= ──────────────────────────────────
@@ -138,8 +205,7 @@ public class SyncHandler {
         result.addProperty("full_update", true);
         result.addProperty("rid",         ridCounter.getAndIncrement());
         result.addProperty("show_flags",  true);
-        result.add("peers", dl != null ? TorrentMapper.buildPeersJson(dl)
-                                       : new com.google.gson.JsonObject());
+        result.add("peers", dl != null ? TorrentMapper.buildPeersJson(dl) : new JsonObject());
         HttpUtils.sendJson(exchange, result.toString());
     }
 
@@ -147,24 +213,25 @@ public class SyncHandler {
 
     private JsonObject buildServerState(long dlSpeed, long ulSpeed,
                                         long dlData, long ulData, long peerCount) {
-        // Free disk space — best-effort from the default save path
-        long freeSpace = 0;
-        try {
-            String savePath = pi.getPluginconfig().getPluginStringParameter("nexus.default.savepath", "");
-            if (savePath.isEmpty()) savePath = System.getProperty("user.home");
-            freeSpace = new java.io.File(savePath).getFreeSpace();
-        } catch (Exception ignored) {}
+        long now = System.currentTimeMillis();
+        if (now - cachedFreeSpaceAt > 10_000L) {
+            try {
+                String savePath = pi.getPluginconfig().getPluginStringParameter("nexus.default.savepath", "");
+                if (savePath.isEmpty()) savePath = System.getProperty("user.home");
+                cachedFreeSpace = new java.io.File(savePath).getFreeSpace();
+            } catch (Exception ignored) {}
+            cachedFreeSpaceAt = now;
+        }
+        long freeSpace = cachedFreeSpace;
 
-        // All-time totals
         long alltimeDl = dlData, alltimeUl = ulData;
         try {
             alltimeDl = pi.getDownloadManager().getStats().getOverallDataBytesReceived();
             alltimeUl = pi.getDownloadManager().getStats().getOverallDataBytesSent();
         } catch (Exception ignored) {}
 
-        double globalRatio = (alltimeDl > 0) ? (double) alltimeUl / alltimeDl : 0.0;
+        double globalRatio = (alltimeDl > 0) ? (double) alltimeUl / alltimeDl : -1.0;
 
-        // Global rate limits (bytes/sec, 0 = unlimited)
         long dlRateLimit = 0, ulRateLimit = 0;
         try {
             long kb = pi.getPluginconfig().getCoreLongParameter(com.biglybt.pif.PluginConfig.CORE_PARAM_LONG_MAX_DOWNLOAD_SPEED_KBYTES_PER_SEC);
@@ -176,36 +243,25 @@ public class SyncHandler {
         } catch (Exception ignored) {}
 
         JsonObject s = new JsonObject();
-
-        // Connection
         s.addProperty("connection_status",        "connected");
         s.addProperty("dht_nodes",                0);
         s.addProperty("total_peer_connections",   (int) peerCount);
-
-        // Current session speeds
         s.addProperty("dl_info_speed",            dlSpeed);
         s.addProperty("dl_info_data",             dlData);
         s.addProperty("dl_rate_limit",            dlRateLimit);
         s.addProperty("up_info_speed",            ulSpeed);
         s.addProperty("up_info_data",             ulData);
         s.addProperty("up_rate_limit",            ulRateLimit);
-
-        // All-time
         s.addProperty("alltime_dl",               alltimeDl);
         s.addProperty("alltime_ul",               alltimeUl);
-        s.addProperty("global_ratio",             globalRatio);
+        // qBittorrent returns global_ratio as a formatted string, not a raw float
+        s.addProperty("global_ratio",             globalRatio < 0 ? "-1" : String.format("%.2f", globalRatio));
         s.addProperty("total_wasted_session",     0L);
-
-        // Disk
         s.addProperty("free_space_on_disk",       freeSpace);
-
-        // Queuing / feature flags
         s.addProperty("queueing",                 false);
         s.addProperty("use_alt_speed_limits",     false);
         s.addProperty("use_subcategories",        false);
         s.addProperty("refresh_interval",         2000);
-
-        // Cache / IO stats (not exposed by BiglyBT plugin API — report zeros)
         s.addProperty("read_cache_hits",          "0%");
         s.addProperty("read_cache_overload",      "0%");
         s.addProperty("write_cache_overload",     "0%");
@@ -213,11 +269,12 @@ public class SyncHandler {
         s.addProperty("queued_io_jobs",           0);
         s.addProperty("total_queued_size",        0L);
         s.addProperty("average_time_queue",       0);
-
-        // External addresses (unknown)
         s.addProperty("last_external_address_v4", "");
         s.addProperty("last_external_address_v6", "");
-
         return s;
+    }
+
+    private static int parseInt(String s) {
+        try { return Integer.parseInt(s); } catch (Exception e) { return 0; }
     }
 }

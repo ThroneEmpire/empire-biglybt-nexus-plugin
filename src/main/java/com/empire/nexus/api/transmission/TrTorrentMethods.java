@@ -323,12 +323,9 @@ class TrTorrentMethods {
                 if (args.has("upload_limited") && !args.get("upload_limited").getAsBoolean())
                     dl.setUploadRateLimitBytesPerSecond(0);
                 if (args.has("labels")) {
-                    com.biglybt.pif.torrent.TorrentAttribute attr = TorrentMapper.getTagsAttr();
-                    if (attr != null) {
-                        List<String> labels = new ArrayList<>();
-                        for (JsonElement e : args.getAsJsonArray("labels")) labels.add(e.getAsString());
-                        dl.setListAttribute(attr, labels.toArray(new String[0]));
-                    }
+                    List<String> labels = new ArrayList<>();
+                    for (JsonElement e : args.getAsJsonArray("labels")) labels.add(e.getAsString());
+                    TorrentMapper.addTagsToDownload(dl, labels);
                 }
                 if (args.has("queue_position"))
                     dl.setPosition(args.get("queue_position").getAsInt());
@@ -480,13 +477,7 @@ class TrTorrentMethods {
 
     private JsonArray buildLabels(Download dl) {
         JsonArray labels = new JsonArray();
-        try {
-            com.biglybt.pif.torrent.TorrentAttribute attr = TorrentMapper.getTagsAttr();
-            if (attr != null) {
-                String[] tags = dl.getListAttribute(attr);
-                if (tags != null) for (String tag : tags) if (tag != null && !tag.isEmpty()) labels.add(tag);
-            }
-        } catch (Exception ignored) {}
+        TorrentMapper.getNativeTags(dl).forEach(labels::add);
         return labels;
     }
 
