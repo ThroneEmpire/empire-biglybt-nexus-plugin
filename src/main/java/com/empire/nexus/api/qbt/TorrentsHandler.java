@@ -38,55 +38,58 @@ public class TorrentsHandler {
             case "peers" -> peers(exchange);
             case "pieceStates" -> HttpUtils.sendJson(exchange, "[]");
             case "pieceHashes" -> pieceHashes(exchange);
-            case "categories" -> categories(exchange);
-            case "tags" -> tags(exchange);
             case "count" -> count(exchange);
+            case "webseeds" -> webseeds(exchange);
+            case "exportTorrent" -> exportTorrent(exchange);
 
+            // Torrent actions
             case "add" -> add(exchange);
-            case "pause", "stop" -> pause(exchange);   // stop = qBt 5.x alias
-            case "resume", "start" -> resume(exchange);  // start = qBt 5.x alias
+            case "pause", "stop" -> pause(exchange);      // stop = qBt 5.x alias
+            case "resume", "start" -> resume(exchange);   // start = qBt 5.x alias
             case "delete" -> delete(exchange);
             case "recheck" -> recheck(exchange);
             case "reannounce" -> reannounce(exchange);
             case "rename" -> rename(exchange);
             case "filePrio" -> filePrio(exchange);
+            case "setForceStart" -> setForceStart(exchange);
+            case "toggleSequentialDownload" -> toggleSequentialDownload(exchange);
 
-            case "setCategory" -> setCategory(exchange);
-            case "addTags" -> addTags(exchange);
-            case "removeTags" -> removeTags(exchange);
-
+            // Speed limits
             case "downloadLimit" -> getDownloadLimit(exchange);
             case "uploadLimit" -> getUploadLimit(exchange);
             case "setDownloadLimit" -> setDownloadLimit(exchange);
             case "setUploadLimit" -> setUploadLimit(exchange);
 
-            // Category management
-            case "createCategory",
-                 "editCategory" -> HttpUtils.sendText(exchange, "Ok.");
-            case "removeCategories" -> removeCategories(exchange);
-
-            // Tag management — no-op stubs (tags stored per-torrent in addTags/removeTags)
-            case "createTags",
-                 "deleteTags" -> HttpUtils.sendText(exchange, "Ok.");
-
-            case "webseeds" -> webseeds(exchange);
-            case "setLocation",
-                 "setSavePath",
-                 "setDownloadPath" -> setLocation(exchange);
+            // Queue priority
             case "topPrio" -> topPrio(exchange);
             case "bottomPrio" -> bottomPrio(exchange);
             case "increasePrio" -> increasePrio(exchange);
             case "decreasePrio" -> decreasePrio(exchange);
 
-            case "toggleSequentialDownload" -> toggleSequentialDownload(exchange);
+            // Save path
+            case "setLocation",
+                 "setSavePath",
+                 "setDownloadPath" -> setLocation(exchange);
 
-            case "setForceStart" -> setForceStart(exchange);
-
+            // Trackers / peers
             case "addTrackers" -> addTrackers(exchange);
             case "removeTrackers" -> removeTrackers(exchange);
             case "editTracker" -> editTracker(exchange);
             case "addPeers" -> addPeers(exchange);
-            case "exportTorrent" -> exportTorrent(exchange);
+
+            // Category management
+            case "categories" -> categories(exchange);
+            case "setCategory" -> setCategory(exchange);
+            case "createCategory" -> createCategory(exchange);
+            case "editCategory" -> HttpUtils.sendText(exchange, "Ok.");
+            case "removeCategories" -> removeCategories(exchange);
+
+            // Tag management
+            case "tags" -> tags(exchange);
+            case "addTags" -> addTags(exchange);
+            case "removeTags" -> removeTags(exchange);
+            case "createTags" -> createTags(exchange);
+            case "deleteTags" -> deleteTags(exchange);
 
             // Misc accepted but no-op
             case "setAutoManagement",
@@ -502,6 +505,36 @@ public class TorrentsHandler {
         HttpUtils.sendJson(exchange, cats.toString());
     }
 
+    // ── POST /api/v2/torrents/setCategory ────────────────────────────────────
+
+    private void setCategory(HttpExchange exchange) throws IOException {
+        Map<String, String> params = HttpUtils.formParams(exchange);
+        String cat = params.getOrDefault("category", "").trim();
+        String hashes = params.getOrDefault("hashes", "");
+        forEachMatchingHashes(hashes, dl -> {
+            try {
+                dl.setCategory(cat);
+            } catch (Exception ignored) {
+            }
+        });
+        HttpUtils.sendText(exchange, "Ok.");
+    }
+
+    // POST /api/v2/torrents/createCategory
+    private void createCategory(HttpExchange exchange) throws IOException {
+        Map<String, String> params = HttpUtils.formParams(exchange);
+        String name = params.get("category");
+        if (name == null || name.isEmpty()) {
+            HttpUtils.sendText(exchange, "Category name is empty", 400);
+            return;
+        }
+        // Don't try to add an already existing category.
+        if (!TorrentMapper.isUserCategory(name)) {
+            CategoryManager.createCategory(name);
+        }
+        HttpUtils.sendText(exchange, "Ok.");
+    }
+
     // GET /api/v2/torrents/removeCategories
     private void removeCategories(HttpExchange exchange) throws IOException {
         Map<String, String> params = HttpUtils.formParams(exchange);
@@ -511,10 +544,11 @@ public class TorrentsHandler {
             return;
         }
 
-        Set<String> catsToRemove = new HashSet<>(Arrays.asList(catsToRemoveRaw.split("\n")));
+        String[] catsToRemove = catsToRemoveRaw.split("\n");
         for (String s : catsToRemove) {
+            if (s.isEmpty()) continue;
             Category category = CategoryManager.getCategory(s);
-            TorrentMapper.removeCategory(category);
+            if (category != null) TorrentMapper.removeCategory(category);
         }
 
         HttpUtils.sendText(exchange, "Ok.");
@@ -526,6 +560,50 @@ public class TorrentsHandler {
         JsonArray arr = new JsonArray();
         TorrentMapper.getAllUserTags().forEach(arr::add);
         HttpUtils.sendJson(exchange, arr.toString());
+    }
+
+    // ── POST /api/v2/torrents/addTags ─────────────────────────────────────────
+
+    private void addTags(HttpExchange exchange) throws IOException {
+        Map<String, String> params = HttpUtils.formParams(exchange);
+        List<String> toAdd = parseCsv(params.getOrDefault("tags", "").trim());
+        if (toAdd.isEmpty()) {
+            HttpUtils.sendText(exchange, "Ok.");
+            return;
+        }
+        forEachMatchingHashes(params.getOrDefault("hashes", ""),
+                dl -> TorrentMapper.addTagsToDownload(dl, toAdd));
+        HttpUtils.sendText(exchange, "Ok.");
+    }
+
+    // ── POST /api/v2/torrents/removeTags ──────────────────────────────────────
+
+    private void removeTags(HttpExchange exchange) throws IOException {
+        Map<String, String> params = HttpUtils.formParams(exchange);
+        List<String> toRemove = parseCsv(params.getOrDefault("tags", "").trim());
+        if (toRemove.isEmpty()) {
+            HttpUtils.sendText(exchange, "Ok.");
+            return;
+        }
+        forEachMatchingHashes(params.getOrDefault("hashes", ""),
+                dl -> TorrentMapper.removeTagsFromDownload(dl, toRemove));
+        HttpUtils.sendText(exchange, "Ok.");
+    }
+
+    // ── POST /api/v2/torrents/createTags ─────────────────────────────────────
+
+    private void createTags(HttpExchange exchange) throws IOException {
+        List<String> tags = parseCsv(HttpUtils.formParams(exchange).getOrDefault("tags", ""));
+        if (!tags.isEmpty()) TorrentMapper.createGlobalTags(tags);
+        HttpUtils.sendText(exchange, "Ok.");
+    }
+
+    // ── POST /api/v2/torrents/deleteTags ─────────────────────────────────────
+
+    private void deleteTags(HttpExchange exchange) throws IOException {
+        List<String> tags = parseCsv(HttpUtils.formParams(exchange).getOrDefault("tags", ""));
+        if (!tags.isEmpty()) TorrentMapper.deleteGlobalTags(tags);
+        HttpUtils.sendText(exchange, "Ok.");
     }
 
     // ── GET /api/v2/torrents/count ────────────────────────────────────────────
@@ -764,49 +842,6 @@ public class TorrentsHandler {
             }
         } catch (Exception ignored) {
         }
-        HttpUtils.sendText(exchange, "Ok.");
-    }
-
-    // ── POST /api/v2/torrents/setCategory ────────────────────────────────────
-
-    private void setCategory(HttpExchange exchange) throws IOException {
-        Map<String, String> params = HttpUtils.formParams(exchange);
-        String cat = params.getOrDefault("category", "").trim();
-        String hashes = params.getOrDefault("hashes", "");
-        forEachMatchingHashes(hashes, dl -> {
-            try {
-                dl.setCategory(cat);
-            } catch (Exception ignored) {
-            }
-        });
-        HttpUtils.sendText(exchange, "Ok.");
-    }
-
-    // ── POST /api/v2/torrents/addTags ─────────────────────────────────────────
-
-    private void addTags(HttpExchange exchange) throws IOException {
-        Map<String, String> params = HttpUtils.formParams(exchange);
-        List<String> toAdd = parseCsv(params.getOrDefault("tags", "").trim());
-        if (toAdd.isEmpty()) {
-            HttpUtils.sendText(exchange, "Ok.");
-            return;
-        }
-        forEachMatchingHashes(params.getOrDefault("hashes", ""),
-                dl -> TorrentMapper.addTagsToDownload(dl, toAdd));
-        HttpUtils.sendText(exchange, "Ok.");
-    }
-
-    // ── POST /api/v2/torrents/removeTags ──────────────────────────────────────
-
-    private void removeTags(HttpExchange exchange) throws IOException {
-        Map<String, String> params = HttpUtils.formParams(exchange);
-        List<String> toRemove = parseCsv(params.getOrDefault("tags", "").trim());
-        if (toRemove.isEmpty()) {
-            HttpUtils.sendText(exchange, "Ok.");
-            return;
-        }
-        forEachMatchingHashes(params.getOrDefault("hashes", ""),
-                dl -> TorrentMapper.removeTagsFromDownload(dl, toRemove));
         HttpUtils.sendText(exchange, "Ok.");
     }
 

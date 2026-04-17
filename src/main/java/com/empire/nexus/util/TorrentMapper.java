@@ -33,6 +33,7 @@ public final class TorrentMapper {
     public static void init(PluginInterface pi) {
     }
 
+    /** Returns BiglyBT's "manual" tag type — the bucket where all user-created tags live. Returns null if unavailable. */
     private static com.biglybt.core.tag.TagType manualTagType() {
         try {
             return com.biglybt.core.tag.TagManagerFactory.getTagManager()
@@ -42,6 +43,7 @@ public final class TorrentMapper {
         }
     }
 
+    /** Converts a plugin-API Download to a core DownloadManager, needed to access tag assignment and internal state. */
     private static com.biglybt.core.download.DownloadManager unwrap(Download dl) {
         try {
             return (com.biglybt.core.download.DownloadManager) PluginCoreUtils.unwrap(dl);
@@ -50,6 +52,7 @@ public final class TorrentMapper {
         }
     }
 
+    /** Returns the names of all user tags currently assigned to a specific download. */
     public static java.util.Set<String> getNativeTags(Download dl) {
         java.util.Set<String> result = new java.util.LinkedHashSet<>();
         com.biglybt.core.download.DownloadManager dm = unwrap(dl);
@@ -64,6 +67,7 @@ public final class TorrentMapper {
         return result;
     }
 
+    /** Returns all user-defined tag names that exist in the system (not per-torrent — used to populate the UI tag sidebar). */
     public static java.util.Set<String> getAllUserTags() {
         java.util.Set<String> result = new java.util.LinkedHashSet<>();
         com.biglybt.core.tag.TagType tt = manualTagType();
@@ -71,6 +75,7 @@ public final class TorrentMapper {
         return result;
     }
 
+    /** Assigns the given tag names to a download, creating any tags that don't exist yet. Skips tags already applied. */
     public static void addTagsToDownload(Download dl, java.util.Collection<String> tagNames) {
         com.biglybt.core.download.DownloadManager dm = unwrap(dl);
         com.biglybt.core.tag.TagType tt = manualTagType();
@@ -86,6 +91,7 @@ public final class TorrentMapper {
         }
     }
 
+    /** Removes the given tag names from a download. Does not delete the tag itself — only unlinks it from this torrent. */
     public static void removeTagsFromDownload(Download dl, java.util.Collection<String> tagNames) {
         com.biglybt.core.download.DownloadManager dm = unwrap(dl);
         com.biglybt.core.tag.TagType tt = manualTagType();
@@ -95,6 +101,33 @@ public final class TorrentMapper {
             try {
                 com.biglybt.core.tag.Tag tag = tt.getTag(name, true);
                 if (tag != null && tag.hasTaggable(dm)) tag.removeTaggable(dm);
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    /** Creates global tags (not assigned to any download) if they don't already exist. */
+    public static void createGlobalTags(java.util.Collection<String> tagNames) {
+        com.biglybt.core.tag.TagType tt = manualTagType();
+        if (tt == null) return;
+        for (String name : tagNames) {
+            if (name == null || name.isEmpty()) continue;
+            try {
+                if (tt.getTag(name, false) == null) tt.createTag(name, true);
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    /** Permanently deletes the named tags from the system, removing them from all downloads. */
+    public static void deleteGlobalTags(java.util.Collection<String> tagNames) {
+        com.biglybt.core.tag.TagType tt = manualTagType();
+        if (tt == null) return;
+        for (String name : tagNames) {
+            if (name == null || name.isEmpty()) continue;
+            try {
+                com.biglybt.core.tag.Tag tag = tt.getTag(name, false);
+                if (tag != null) tag.removeTag();
             } catch (Exception ignored) {
             }
         }
@@ -117,6 +150,7 @@ public final class TorrentMapper {
         return true; // if internal API unavailable, trust non-prefixed name
     }
 
+    /** Returns all user-created categories, filtering out BiglyBT's internal built-in ones (TYPE_USER only). */
     public static com.biglybt.core.category.Category[] getUserCategories() {
         try {
             com.biglybt.core.category.Category[] all =
@@ -134,6 +168,10 @@ public final class TorrentMapper {
     // https://github.com/BiglySoftware/BiglyBT/blob/31285ffe0f78f68b19b8f7fb5e2c7a16276de068/uis/src/com/biglybt/ui/swt/views/utils/CategoryUIUtils.java#L143
     //
     // We need to remove from each torrent and then remove from the manager.
+    /**
+     * Permanently deletes a category. Must first unassign it from every torrent that has it,
+     * then remove it from CategoryManager. Casts to CategoryImpl to get getTaggedDownloads().
+     */
     public static void removeCategory(Category category) {
         CategoryImpl catImpl = (CategoryImpl) category;
 
@@ -175,6 +213,11 @@ public final class TorrentMapper {
 
     // ── torrent info ──────────────────────────────────────────────────────────
 
+    /**
+     * Builds the full JSON object for a single torrent, matching the shape qBittorrent returns
+     * from /api/v2/torrents/info. Covers identity, sizes, speeds, time, state, peers, tracker,
+     * paths, category, tags, metadata, limits, and queue flags.
+     */
     public static JsonObject toQbtInfo(Download dl) {
         JsonObject o = new JsonObject();
 
@@ -573,6 +616,11 @@ public final class TorrentMapper {
         return sb.toString();
     }
 
+    /**
+     * Maps BiglyBT's numeric download state + paused/speed/complete booleans to a qBittorrent
+     * state string: "downloading", "uploading", "pausedDL", "pausedUP", "stalledDL",
+     * "stalledUP", "queuedDL", "queuedUP", "checkingDL", "error", "unknown".
+     */
     private static String toQbtState(Download dl) {
         boolean paused = dl.isPaused();
         long dlSpeed = 0, ulSpeed = 0;
@@ -612,11 +660,13 @@ public final class TorrentMapper {
         }
     }
 
+    /** Returns upload/download ratio, or 0.0 if nothing has been downloaded yet (avoids divide-by-zero). */
     private static double safeRatio(long downloaded, long uploaded) {
         if (downloaded <= 0) return 0.0;
         return (double) uploaded / downloaded;
     }
 
+    /** Expands a space-separated peer flags string (e.g. "D U I") into a human-readable tooltip. */
     private static String buildFlagsDesc(String flags) {
         if (flags.isEmpty()) return "";
         StringBuilder desc = new StringBuilder();
@@ -635,6 +685,7 @@ public final class TorrentMapper {
         return desc.toString().trim();
     }
 
+    /** URL-encodes a string for use in magnet URIs, using %20 for spaces instead of +. */
     private static String urlEncode(String s) {
         try {
             return java.net.URLEncoder.encode(s, "UTF-8").replace("+", "%20");
