@@ -16,27 +16,29 @@ import java.util.Base64;
 
 /**
  * Handles the Transmission RPC protocol at POST /transmission/rpc.
- *
+ * <p>
  * CSRF token handshake:
- *   1. Client sends request without X-Transmission-Session-Id.
- *   2. Server replies 409 with X-Transmission-Session-Id: <token>.
- *   3. Client retries with the token. Server processes normally.
- *
+ * 1. Client sends request without X-Transmission-Session-Id.
+ * 2. Server replies 409 with X-Transmission-Session-Id: <token>.
+ * 3. Client retries with the token. Server processes normally.
+ * <p>
  * Authentication: HTTP Basic Auth (same username/password as the qBittorrent API).
  * Envelope:  {"method":"torrent-get","arguments":{…},"tag":1}
  * Response:  {"result":"success","arguments":{…},"tag":1}
  */
 public class TransmissionRouter implements HttpHandler {
 
-    /** CSRF token — fixed; sufficient for single-user use. */
+    /**
+     * CSRF token — fixed; sufficient for single-user use.
+     */
     static final String SESSION_ID = "nexus-transmission-session-00000000";
 
-    private final NexusServer      server;
+    private final NexusServer server;
     private final TrSessionMethods session;
     private final TrTorrentMethods torrent;
 
     public TransmissionRouter(PluginInterface pi, NexusServer server) {
-        this.server  = server;
+        this.server = server;
         this.session = new TrSessionMethods(pi);
         this.torrent = new TrTorrentMethods(pi);
     }
@@ -79,14 +81,14 @@ public class TransmissionRouter implements HttpHandler {
         }
 
         // Normalize method name: some UIs send "session_get", spec says "session-get"
-        String      method = request.has("method")    ? request.get("method").getAsString().replace('_', '-') : "";
+        String method = request.has("method") ? request.get("method").getAsString().replace('_', '-') : "";
         // Support both "arguments" (Transmission RPC spec) and "params" (JSON-RPC 2.0 style)
-        JsonObject  args   = request.has("arguments") ? request.getAsJsonObject("arguments")
-                           : request.has("params")    ? request.getAsJsonObject("params")
-                           : new JsonObject();
+        JsonObject args = request.has("arguments") ? request.getAsJsonObject("arguments")
+                : request.has("params") ? request.getAsJsonObject("params")
+                  : new JsonObject();
         // Support both "tag" (Transmission RPC spec) and "id" (JSON-RPC 2.0 style)
-        JsonElement tagEl  = request.has("tag") ? request.get("tag")
-                           : request.has("id")  ? request.get("id") : null;
+        JsonElement tagEl = request.has("tag") ? request.get("tag")
+                : request.has("id") ? request.get("id") : null;
 
         JsonObject result;
         try {
@@ -126,28 +128,32 @@ public class TransmissionRouter implements HttpHandler {
 
     private JsonObject dispatch(String method, JsonObject args) {
         return switch (method) {
-            case "session-get"          -> session.get(args);
-            case "session-set"          -> session.set(args);
-            case "session-stats"        -> session.stats();
-            case "torrent-get"          -> torrent.get(args);
-            case "torrent-add"          -> torrent.add(args);
-            case "torrent-remove"       -> torrent.remove(args);
+            case "session-get" -> session.get(args);
+            case "session-set" -> session.set(args);
+            case "session-stats" -> session.stats();
+            case "torrent-get" -> torrent.get(args);
+            case "torrent-add" -> torrent.add(args);
+            case "torrent-remove" -> torrent.remove(args);
             case "torrent-start",
-                 "torrent-start-now"    -> torrent.start(args);
-            case "torrent-stop"         -> torrent.stop(args);
-            case "torrent-set"          -> torrent.set(args);
-            case "torrent-verify"       -> torrent.verify(args);
-            case "torrent-reannounce"   -> torrent.reannounce(args);
+                 "torrent-start-now" -> torrent.start(args);
+            case "torrent-stop" -> torrent.stop(args);
+            case "torrent-set" -> torrent.set(args);
+            case "torrent-verify" -> torrent.verify(args);
+            case "torrent-reannounce" -> torrent.reannounce(args);
             case "torrent-set-location" -> torrent.setLocation(args);
-            case "torrent-rename-path"  -> torrent.renamePath(args);
-            case "free-space"           -> torrent.freeSpace(args);
-            case "port-test"            -> { JsonObject a = new JsonObject(); a.addProperty("port-is-open", true); yield success(a); }
-            case "blocklist-update"     -> success(new JsonObject());
-            case "queue-move-top"       -> torrent.queueMove(args, "top");
-            case "queue-move-bottom"    -> torrent.queueMove(args, "bottom");
-            case "queue-move-up"        -> torrent.queueMove(args, "up");
-            case "queue-move-down"      -> torrent.queueMove(args, "down");
-            default                     -> error("method not found: " + method);
+            case "torrent-rename-path" -> torrent.renamePath(args);
+            case "free-space" -> torrent.freeSpace(args);
+            case "port-test" -> {
+                JsonObject a = new JsonObject();
+                a.addProperty("port-is-open", true);
+                yield success(a);
+            }
+            case "blocklist-update" -> success(new JsonObject());
+            case "queue-move-top" -> torrent.queueMove(args, "top");
+            case "queue-move-bottom" -> torrent.queueMove(args, "bottom");
+            case "queue-move-up" -> torrent.queueMove(args, "up");
+            case "queue-move-down" -> torrent.queueMove(args, "down");
+            default -> error("method not found: " + method);
         };
     }
 
@@ -162,13 +168,15 @@ public class TransmissionRouter implements HttpHandler {
             int sep = decoded.indexOf(':');
             if (sep < 0) return false;
             return decoded.substring(0, sep).equals(server.getUsername())
-                && decoded.substring(sep + 1).equals(server.getPassword());
+                    && decoded.substring(sep + 1).equals(server.getPassword());
         } catch (Exception e) {
             return false;
         }
     }
 
-    /** Recursively convert JSON keys (camelCase or hyphen-case) to underscore_case for JSON-RPC 2.0 clients. */
+    /**
+     * Recursively convert JSON keys (camelCase or hyphen-case) to underscore_case for JSON-RPC 2.0 clients.
+     */
     private static JsonElement hyphenKeysToUnderscores(JsonElement element) {
         if (element.isJsonObject()) {
             JsonObject out = new JsonObject();
@@ -183,13 +191,18 @@ public class TransmissionRouter implements HttpHandler {
         return element;
     }
 
-    /** Convert camelCase or hyphen-case key to underscore_case: "percentDone" → "percent_done". */
+    /**
+     * Convert camelCase or hyphen-case key to underscore_case: "percentDone" → "percent_done".
+     */
     private static String camelToUnderscore(String s) {
         if (s == null || s.isEmpty()) return s;
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
-            if (c == '-') { sb.append('_'); continue; }
+            if (c == '-') {
+                sb.append('_');
+                continue;
+            }
             if (Character.isUpperCase(c)) {
                 if (sb.length() > 0) sb.append('_');
                 sb.append(Character.toLowerCase(c));

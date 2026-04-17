@@ -13,7 +13,7 @@ import java.util.Map;
 
 /**
  * /api/v2/transfer/* endpoints.
- *
+ * <p>
  * GET  info                — aggregate speed + session data (status bar)
  * GET  speedLimitsMode     — alt-speed mode flag (0/1)
  * GET  downloadLimit       — global download limit in bytes/sec
@@ -32,15 +32,15 @@ public class TransferHandler {
 
     public void handle(HttpExchange exchange) throws IOException {
         switch (HttpUtils.pathSegment(exchange)) {
-            case "info"               -> info(exchange);
-            case "speedLimitsMode"    -> HttpUtils.sendText(exchange, "0");
-            case "downloadLimit"      -> downloadLimit(exchange);
-            case "uploadLimit"        -> uploadLimit(exchange);
-            case "setDownloadLimit"   -> setDownloadLimit(exchange);
-            case "setUploadLimit"     -> setUploadLimit(exchange);
+            case "info" -> info(exchange);
+            case "speedLimitsMode" -> HttpUtils.sendText(exchange, "0");
+            case "downloadLimit" -> downloadLimit(exchange);
+            case "uploadLimit" -> uploadLimit(exchange);
+            case "setDownloadLimit" -> setDownloadLimit(exchange);
+            case "setUploadLimit" -> setUploadLimit(exchange);
             case "toggleSpeedLimitsMode",
-                 "banPeers"            -> HttpUtils.sendText(exchange, "Ok.");
-            default                   -> HttpUtils.sendText(exchange, "Not Found", 404);
+                 "banPeers" -> HttpUtils.sendText(exchange, "Ok.");
+            default -> HttpUtils.sendText(exchange, "Not Found", 404);
         }
     }
 
@@ -53,8 +53,8 @@ public class TransferHandler {
             DownloadStats s = dl.getStats();
             dlSpeed += s.getDownloadAverage();
             ulSpeed += s.getUploadAverage();
-            dlData  += s.getDownloaded(false);
-            ulData  += s.getUploaded(false);
+            dlData += s.getDownloaded(false);
+            ulData += s.getUploaded(false);
         }
 
         long dlLimit = globalDownloadLimitBytes();
@@ -97,7 +97,8 @@ public class TransferHandler {
             pi.getPluginconfig().setCoreLongParameter(
                     PluginConfig.CORE_PARAM_LONG_MAX_DOWNLOAD_SPEED_KBYTES_PER_SEC,
                     limit > 0 ? limit / 1024L : 0L);
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         HttpUtils.sendJson(exchange, String.valueOf(limit));
     }
 
@@ -110,31 +111,44 @@ public class TransferHandler {
             pi.getPluginconfig().setCoreLongParameter(
                     PluginConfig.CORE_PARAM_LONG_MAX_UPLOAD_SPEED_KBYTES_PER_SEC,
                     limit > 0 ? limit / 1024L : 0L);
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         HttpUtils.sendJson(exchange, String.valueOf(limit));
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /** Returns global download limit in bytes/sec (0 = unlimited). */
+    /**
+     * Returns global download limit in bytes/sec (0 = unlimited).
+     */
     private long globalDownloadLimitBytes() {
         try {
             long kb = pi.getPluginconfig().getCoreLongParameter(
                     PluginConfig.CORE_PARAM_LONG_MAX_DOWNLOAD_SPEED_KBYTES_PER_SEC);
             return kb > 0 ? kb * 1024L : 0L;
-        } catch (Exception e) { return 0L; }
+        } catch (Exception e) {
+            return 0L;
+        }
     }
 
-    /** Returns global upload limit in bytes/sec (0 = unlimited). */
+    /**
+     * Returns global upload limit in bytes/sec (0 = unlimited).
+     */
     private long globalUploadLimitBytes() {
         try {
             long kb = pi.getPluginconfig().getCoreLongParameter(
                     PluginConfig.CORE_PARAM_LONG_MAX_UPLOAD_SPEED_KBYTES_PER_SEC);
             return kb > 0 ? kb * 1024L : 0L;
-        } catch (Exception e) { return 0L; }
+        } catch (Exception e) {
+            return 0L;
+        }
     }
 
     private static long parseLong(String s, long def) {
-        try { return Long.parseLong(s); } catch (Exception e) { return def; }
+        try {
+            return Long.parseLong(s);
+        } catch (Exception e) {
+            return def;
+        }
     }
 }

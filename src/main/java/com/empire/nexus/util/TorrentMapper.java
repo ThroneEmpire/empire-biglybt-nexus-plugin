@@ -18,29 +18,36 @@ import com.google.gson.JsonObject;
 /**
  * Maps a BiglyBT {@link Download} to the JSON shape qBittorrent returns from
  * /api/v2/torrents/info — covering fields used by qBittorrent-compatible web UIs.
- *
+ * <p>
  * Call {@link #init(PluginInterface)} once at plugin startup before any mapping.
- *
+ * <p>
  * BiglyBT Download state constants:
- *   ST_WAITING=1  ST_PREPARING=2  ST_READY=3  ST_DOWNLOADING=4
- *   ST_SEEDING=6  ST_STOPPING=7  ST_STOPPED=8  ST_ERROR=9  ST_QUEUED=10
+ * ST_WAITING=1  ST_PREPARING=2  ST_READY=3  ST_DOWNLOADING=4
+ * ST_SEEDING=6  ST_STOPPING=7  ST_STOPPED=8  ST_ERROR=9  ST_QUEUED=10
  */
 public final class TorrentMapper {
 
-    private TorrentMapper() {}
+    private TorrentMapper() {
+    }
 
-    public static void init(PluginInterface pi) {}
+    public static void init(PluginInterface pi) {
+    }
 
     private static com.biglybt.core.tag.TagType manualTagType() {
         try {
             return com.biglybt.core.tag.TagManagerFactory.getTagManager()
                     .getTagType(com.biglybt.core.tag.TagType.TT_DOWNLOAD_MANUAL);
-        } catch (Exception ignored) { return null; }
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private static com.biglybt.core.download.DownloadManager unwrap(Download dl) {
-        try { return (com.biglybt.core.download.DownloadManager) PluginCoreUtils.unwrap(dl); }
-        catch (Exception ignored) { return null; }
+        try {
+            return (com.biglybt.core.download.DownloadManager) PluginCoreUtils.unwrap(dl);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     public static java.util.Set<String> getNativeTags(Download dl) {
@@ -52,7 +59,8 @@ public final class TorrentMapper {
                     com.biglybt.core.tag.TagManagerFactory.getTagManager()
                             .getTagsForTaggable(com.biglybt.core.tag.TagType.TT_DOWNLOAD_MANUAL, dm);
             if (tags != null) for (com.biglybt.core.tag.Tag tag : tags) result.add(tag.getTagName(true));
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         return result;
     }
 
@@ -73,7 +81,8 @@ public final class TorrentMapper {
                 com.biglybt.core.tag.Tag tag = tt.getTag(name, true);
                 if (tag == null) tag = tt.createTag(name, true);
                 if (tag != null && !tag.hasTaggable(dm)) tag.addTaggable(dm);
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
     }
 
@@ -86,7 +95,8 @@ public final class TorrentMapper {
             try {
                 com.biglybt.core.tag.Tag tag = tt.getTag(name, true);
                 if (tag != null && tag.hasTaggable(dm)) tag.removeTaggable(dm);
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
     }
 
@@ -102,7 +112,8 @@ public final class TorrentMapper {
             com.biglybt.core.category.Category cat =
                     com.biglybt.core.category.CategoryManager.getCategory(name);
             return cat != null && cat.getType() == com.biglybt.core.category.Category.TYPE_USER;
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         return true; // if internal API unavailable, trust non-prefixed name
     }
 
@@ -135,11 +146,13 @@ public final class TorrentMapper {
         CategoryManager.removeCategory(catImpl);
     }
 
-    /** Unwrap plugin Download to internal DownloadManagerState for deeper access. Returns null on failure. */
+    /**
+     * Unwrap plugin Download to internal DownloadManagerState for deeper access. Returns null on failure.
+     */
     public static com.biglybt.core.download.DownloadManagerState getDownloadState(Download dl) {
         try {
             com.biglybt.core.download.DownloadManager dm =
-                (com.biglybt.core.download.DownloadManager) PluginCoreUtils.unwrap(dl);
+                    (com.biglybt.core.download.DownloadManager) PluginCoreUtils.unwrap(dl);
             return dm == null ? null : dm.getDownloadState();
         } catch (Exception e) {
             return null;
@@ -153,7 +166,10 @@ public final class TorrentMapper {
      */
     public static boolean isUserDownload(Download dl) {
         if (dl.getTorrent() == null) return false;
-        try { if (dl.getFlag(Download.FLAG_LOW_NOISE)) return false; } catch (Exception ignored) {}
+        try {
+            if (dl.getFlag(Download.FLAG_LOW_NOISE)) return false;
+        } catch (Exception ignored) {
+        }
         return true;
     }
 
@@ -162,36 +178,37 @@ public final class TorrentMapper {
     public static JsonObject toQbtInfo(Download dl) {
         JsonObject o = new JsonObject();
 
-        Torrent       torrent = dl.getTorrent();
-        DownloadStats stats   = dl.getStats();
+        Torrent torrent = dl.getTorrent();
+        DownloadStats stats = dl.getStats();
 
-        String hex      = hashHex(torrent.getHash());
-        long   totalSize = torrent.getSize();
+        String hex = hashHex(torrent.getHash());
+        long totalSize = torrent.getSize();
 
         // ── Identity ─────────────────────────────────────────────────────────
-        o.addProperty("hash",        hex);
+        o.addProperty("hash", hex);
         o.addProperty("infohash_v1", hex);
         o.addProperty("infohash_v2", "");
-        o.addProperty("name",        torrent.getName());
+        o.addProperty("name", torrent.getName());
 
         // Magnet URI (minimal, tracker appended if available)
         String magnetUri = "magnet:?xt=urn:btih:" + hex + "&dn=" + urlEncode(torrent.getName());
         try {
             java.net.URL announceUrl = torrent.getAnnounceURL();
             if (announceUrl != null) magnetUri += "&tr=" + urlEncode(announceUrl.toString());
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         o.addProperty("magnet_uri", magnetUri);
 
         // ── Sizes ────────────────────────────────────────────────────────────
-        int  permille  = stats.getCompleted();
+        int permille = stats.getCompleted();
         float progress = permille / 1000f;
-        long  completed  = (long)(totalSize * progress);
-        long  amountLeft = Math.max(0L, totalSize - completed);
+        long completed = (long) (totalSize * progress);
+        long amountLeft = Math.max(0L, totalSize - completed);
 
-        o.addProperty("size",        totalSize);
-        o.addProperty("total_size",  totalSize);
-        o.addProperty("progress",    progress);
-        o.addProperty("completed",   completed);
+        o.addProperty("size", totalSize);
+        o.addProperty("total_size", totalSize);
+        o.addProperty("progress", progress);
+        o.addProperty("completed", completed);
         o.addProperty("amount_left", amountLeft);
 
         // ── Speeds / transfer ─────────────────────────────────────────────────
@@ -201,16 +218,22 @@ public final class TorrentMapper {
         long ulTotal = stats.getUploaded(false);
 
         long dlSession = 0, ulSession = 0;
-        try { dlSession = stats.getDownloaded(true); } catch (Exception ignored) {}
-        try { ulSession = stats.getUploaded(true);   } catch (Exception ignored) {}
+        try {
+            dlSession = stats.getDownloaded(true);
+        } catch (Exception ignored) {
+        }
+        try {
+            ulSession = stats.getUploaded(true);
+        } catch (Exception ignored) {
+        }
 
-        o.addProperty("dlspeed",             dlSpeed);
-        o.addProperty("upspeed",             ulSpeed);
-        o.addProperty("downloaded",          dlTotal);
-        o.addProperty("uploaded",            ulTotal);
-        o.addProperty("downloaded_session",  dlSession);
-        o.addProperty("uploaded_session",    ulSession);
-        o.addProperty("ratio",               safeRatio(dlTotal, ulTotal));
+        o.addProperty("dlspeed", dlSpeed);
+        o.addProperty("upspeed", ulSpeed);
+        o.addProperty("downloaded", dlTotal);
+        o.addProperty("uploaded", ulTotal);
+        o.addProperty("downloaded_session", dlSession);
+        o.addProperty("uploaded_session", ulSession);
+        o.addProperty("ratio", safeRatio(dlTotal, ulTotal));
 
         // ── ETA ───────────────────────────────────────────────────────────────
         long etaSecs = stats.getETASecs();
@@ -218,9 +241,12 @@ public final class TorrentMapper {
 
         // ── Time ──────────────────────────────────────────────────────────────
         long timeStarted = 0;
-        try { timeStarted = stats.getTimeStarted(); } catch (Exception ignored) {}
+        try {
+            timeStarted = stats.getTimeStarted();
+        } catch (Exception ignored) {
+        }
 
-        long nowSecs  = System.currentTimeMillis() / 1000L;
+        long nowSecs = System.currentTimeMillis() / 1000L;
 
         // Use internal API for real addition time; fall back to session start time
         long addedOn = 0;
@@ -233,13 +259,16 @@ public final class TorrentMapper {
 
         long timeActive = addedOn > 0 ? nowSecs - addedOn : 0L;
 
-        o.addProperty("added_on",      addedOn);
+        o.addProperty("added_on", addedOn);
         o.addProperty("last_activity", nowSecs);
-        o.addProperty("time_active",   timeActive);
+        o.addProperty("time_active", timeActive);
 
         long seedingTime = 0;
-        try { seedingTime = stats.getSecondsOnlySeeding(); } catch (Exception ignored) {}
-        o.addProperty("seeding_time",   seedingTime);
+        try {
+            seedingTime = stats.getSecondsOnlySeeding();
+        } catch (Exception ignored) {
+        }
+        o.addProperty("seeding_time", seedingTime);
         // Use internal API for real completion time; fall back to seeding start time
         long completionOn = 0;
         if (dms != null) {
@@ -250,13 +279,14 @@ public final class TorrentMapper {
             try {
                 long st = stats.getTimeStartedSeeding();
                 if (st > 0) completionOn = st / 1000L;
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
         o.addProperty("completion_on", completionOn);
 
         // ── State ────────────────────────────────────────────────────────────
-        o.addProperty("state",         toQbtState(dl));
-        o.addProperty("force_start",   dl.isForceStart());
+        o.addProperty("state", toQbtState(dl));
+        o.addProperty("force_start", dl.isForceStart());
         o.addProperty("super_seeding", false);
 
         // ── Peers / seeds (connected) ─────────────────────────────────────────
@@ -267,8 +297,9 @@ public final class TorrentMapper {
                 seeds = pm.getStats().getConnectedSeeds();
                 peers = pm.getStats().getConnectedLeechers();
             }
-        } catch (Exception ignored) {}
-        o.addProperty("num_seeds",  seeds);
+        } catch (Exception ignored) {
+        }
+        o.addProperty("num_seeds", seeds);
         o.addProperty("num_leechs", peers);
 
         // Global counts from tracker scrape
@@ -276,26 +307,32 @@ public final class TorrentMapper {
         try {
             DownloadScrapeResult scrape = dl.getAggregatedScrapeResult(false);
             if (scrape != null && scrape.getResponseType() == DownloadScrapeResult.RT_SUCCESS) {
-                numComplete   = scrape.getSeedCount();
+                numComplete = scrape.getSeedCount();
                 numIncomplete = scrape.getNonSeedCount();
             }
-        } catch (Exception ignored) {}
-        o.addProperty("num_complete",   numComplete);
+        } catch (Exception ignored) {
+        }
+        o.addProperty("num_complete", numComplete);
         o.addProperty("num_incomplete", numIncomplete);
 
         // ── Tracker ───────────────────────────────────────────────────────────
-        String trackerUrl  = "";
-        int    trackerCount = 0;
+        String trackerUrl = "";
+        int trackerCount = 0;
         try {
             java.net.URL url = torrent.getAnnounceURL();
-            if (url != null) { trackerUrl = url.toString(); trackerCount = 1; }
-        } catch (Exception ignored) {}
+            if (url != null) {
+                trackerUrl = url.toString();
+                trackerCount = 1;
+            }
+        } catch (Exception ignored) {
+        }
         try {
             com.biglybt.pif.torrent.TorrentAnnounceURLListSet[] sets =
                     torrent.getAnnounceURLList().getSets();
             if (sets != null && sets.length > 0) trackerCount = sets.length;
-        } catch (Exception ignored) {}
-        o.addProperty("tracker",        trackerUrl);
+        } catch (Exception ignored) {
+        }
+        o.addProperty("tracker", trackerUrl);
         o.addProperty("trackers_count", trackerCount);
 
         // Tracker message from last announce
@@ -303,7 +340,8 @@ public final class TorrentMapper {
         try {
             var ann = dl.getLastAnnounceResult();
             if (ann != null) trackerMsg = ann.getError() != null ? ann.getError() : "";
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         o.addProperty("tracker_message", trackerMsg != null ? trackerMsg : "");
 
         // ── Paths ──────────────────────────────────────────────────────────────
@@ -311,7 +349,8 @@ public final class TorrentMapper {
         try {
             String sp = stats.getDownloadDirectory();
             if (sp != null) savePath = sp;
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         try {
             var diskFiles = dl.getDiskManagerFileInfo();
             if (diskFiles != null && diskFiles.length > 0) {
@@ -322,15 +361,19 @@ public final class TorrentMapper {
                             : firstFile.getParentFile().getAbsolutePath();
                 }
             }
-        } catch (Exception ignored) {}
-        o.addProperty("save_path",     savePath);
-        o.addProperty("content_path",  contentPath);
-        o.addProperty("root_path",     contentPath);
+        } catch (Exception ignored) {
+        }
+        o.addProperty("save_path", savePath);
+        o.addProperty("content_path", contentPath);
+        o.addProperty("root_path", contentPath);
         o.addProperty("download_path", savePath);
 
         // ── Category ─────────────────────────────────────────────────────────
         String category = "";
-        try { category = dl.getCategoryName(); } catch (Exception ignored) {}
+        try {
+            category = dl.getCategoryName();
+        } catch (Exception ignored) {
+        }
         if (!isUserCategory(category)) category = "";
         o.addProperty("category", category);
 
@@ -339,39 +382,54 @@ public final class TorrentMapper {
 
         // ── Torrent metadata ──────────────────────────────────────────────────
         String comment = "";
-        try { comment = torrent.getComment(); } catch (Exception ignored) {}
+        try {
+            comment = torrent.getComment();
+        } catch (Exception ignored) {
+        }
         o.addProperty("comment", comment);
 
         String createdBy = "";
-        try { createdBy = torrent.getCreatedBy(); } catch (Exception ignored) {}
+        try {
+            createdBy = torrent.getCreatedBy();
+        } catch (Exception ignored) {
+        }
         o.addProperty("created_by", createdBy != null ? createdBy : "");
 
         boolean isPrivate = false;
-        try { isPrivate = torrent.isPrivate(); } catch (Exception ignored) {}
-        o.addProperty("private",      isPrivate);
+        try {
+            isPrivate = torrent.isPrivate();
+        } catch (Exception ignored) {
+        }
+        o.addProperty("private", isPrivate);
         o.addProperty("has_metadata", true);
-        o.addProperty("reannounce",   0);
+        o.addProperty("reannounce", 0);
 
         // ── Limits / seeding rules ────────────────────────────────────────────
         int dlLimit = 0, ulLimit = 0;
-        try { dlLimit = dl.getDownloadRateLimitBytesPerSecond(); } catch (Exception ignored) {}
-        try { ulLimit = dl.getUploadRateLimitBytesPerSecond();   } catch (Exception ignored) {}
-        o.addProperty("dl_limit",                    dlLimit > 0 ? dlLimit : -1);
-        o.addProperty("up_limit",                    ulLimit > 0 ? ulLimit : -1);
-        o.addProperty("max_ratio",                   -1.0);
-        o.addProperty("max_seeding_time",            -1);
-        o.addProperty("ratio_limit",                 -1.0);
-        o.addProperty("seeding_time_limit",          -1);
+        try {
+            dlLimit = dl.getDownloadRateLimitBytesPerSecond();
+        } catch (Exception ignored) {
+        }
+        try {
+            ulLimit = dl.getUploadRateLimitBytesPerSecond();
+        } catch (Exception ignored) {
+        }
+        o.addProperty("dl_limit", dlLimit > 0 ? dlLimit : -1);
+        o.addProperty("up_limit", ulLimit > 0 ? ulLimit : -1);
+        o.addProperty("max_ratio", -1.0);
+        o.addProperty("max_seeding_time", -1);
+        o.addProperty("ratio_limit", -1.0);
+        o.addProperty("seeding_time_limit", -1);
         o.addProperty("inactive_seeding_time_limit", -1);
-        o.addProperty("max_inactive_seeding_time",   -1);
+        o.addProperty("max_inactive_seeding_time", -1);
 
         // ── Queue / misc flags ────────────────────────────────────────────────
-        o.addProperty("priority",       dl.getPosition());
-        o.addProperty("seq_dl",         dl.getFlag(Download.FLAG_SEQUENTIAL_DOWNLOAD));
+        o.addProperty("priority", dl.getPosition());
+        o.addProperty("seq_dl", dl.getFlag(Download.FLAG_SEQUENTIAL_DOWNLOAD));
         o.addProperty("f_l_piece_prio", false);
-        o.addProperty("auto_tmm",       false);
-        o.addProperty("availability",   progress);
-        o.addProperty("popularity",     0.0);
+        o.addProperty("auto_tmm", false);
+        o.addProperty("availability", progress);
+        o.addProperty("popularity", 0.0);
 
         return o;
     }
@@ -392,16 +450,16 @@ public final class TorrentMapper {
 
             for (Peer peer : peerArr) {
                 try {
-                    String ip   = peer.getIp();
-                    int    port = peer.getTCPListenPort();
+                    String ip = peer.getIp();
+                    int port = peer.getTCPListenPort();
                     if (port <= 0) port = peer.getPort();
                     String key = ip + ":" + port;
 
-                    PeerStats ps  = peer.getStats();
-                    int  dlSpeed  = ps != null ? ps.getDownloadAverage() : 0;
-                    int  ulSpeed  = ps != null ? ps.getUploadAverage()   : 0;
-                    long received = ps != null ? ps.getTotalReceived()   : 0;
-                    long sent     = ps != null ? ps.getTotalSent()       : 0;
+                    PeerStats ps = peer.getStats();
+                    int dlSpeed = ps != null ? ps.getDownloadAverage() : 0;
+                    int ulSpeed = ps != null ? ps.getUploadAverage() : 0;
+                    long received = ps != null ? ps.getTotalReceived() : 0;
+                    long sent = ps != null ? ps.getTotalSent() : 0;
 
                     // Progress: compute from available-pieces bitfield; fall back to API value
                     double progress;
@@ -430,18 +488,29 @@ public final class TorrentMapper {
                     } else {
                         try {
                             if (peer.isInterested() && peer.isChoked()) flags.add("d"); // want but choked
-                        } catch (Exception ignored) {}
+                        } catch (Exception ignored) {
+                        }
                     }
                     if (ulSpeed > 0) {
                         flags.add("U");                          // actively uploading
                     } else {
                         try {
                             if (peer.isInteresting() && peer.isChoking()) flags.add("u"); // they want but we choke
-                        } catch (Exception ignored) {}
+                        } catch (Exception ignored) {
+                        }
                     }
-                    try { if (peer.isOptimisticUnchoke()) flags.add("O"); } catch (Exception ignored) {}
-                    try { if (peer.isSnubbed())  flags.add("S"); } catch (Exception ignored) {}
-                    try { if (peer.isIncoming()) flags.add("I"); } catch (Exception ignored) {}
+                    try {
+                        if (peer.isOptimisticUnchoke()) flags.add("O");
+                    } catch (Exception ignored) {
+                    }
+                    try {
+                        if (peer.isSnubbed()) flags.add("S");
+                    } catch (Exception ignored) {
+                    }
+                    try {
+                        if (peer.isIncoming()) flags.add("I");
+                    } catch (Exception ignored) {
+                    }
 
                     // flags_desc: human-readable tooltip
                     String flagsStr = flags.toString();
@@ -463,35 +532,40 @@ public final class TorrentMapper {
                                 countryName = cc[1];
                             }
                         }
-                    } catch (Exception ignored) {}
+                    } catch (Exception ignored) {
+                    }
 
                     JsonObject p = new JsonObject();
-                    p.addProperty("ip",             ip);
-                    p.addProperty("port",           port);
-                    p.addProperty("client",         peer.getClient() != null ? peer.getClient() : "");
-                    p.addProperty("progress",       progress);
-                    p.addProperty("dl_speed",       dlSpeed);
-                    p.addProperty("up_speed",       ulSpeed);
-                    p.addProperty("downloaded",     received);
-                    p.addProperty("uploaded",       sent);
-                    p.addProperty("flags",          flagsStr);
-                    p.addProperty("flags_desc",     flagsDesc);
-                    p.addProperty("connection",     "BT");
-                    p.addProperty("country",        countryName);
-                    p.addProperty("country_code",   countryCode);
-                    p.addProperty("files",          "");
+                    p.addProperty("ip", ip);
+                    p.addProperty("port", port);
+                    p.addProperty("client", peer.getClient() != null ? peer.getClient() : "");
+                    p.addProperty("progress", progress);
+                    p.addProperty("dl_speed", dlSpeed);
+                    p.addProperty("up_speed", ulSpeed);
+                    p.addProperty("downloaded", received);
+                    p.addProperty("uploaded", sent);
+                    p.addProperty("flags", flagsStr);
+                    p.addProperty("flags_desc", flagsDesc);
+                    p.addProperty("connection", "BT");
+                    p.addProperty("country", countryName);
+                    p.addProperty("country_code", countryCode);
+                    p.addProperty("files", "");
                     p.addProperty("peer_id_client", "");
-                    p.addProperty("relevance",      0.0);
+                    p.addProperty("relevance", 0.0);
                     peers.add(key, p);
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         return peers;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /** Convert a 20-byte SHA-1 hash to a 40-char lowercase hex string. */
+    /**
+     * Convert a 20-byte SHA-1 hash to a 40-char lowercase hex string.
+     */
     public static String hashHex(byte[] hash) {
         if (hash == null) return "";
         StringBuilder sb = new StringBuilder(hash.length * 2);
@@ -502,22 +576,39 @@ public final class TorrentMapper {
     private static String toQbtState(Download dl) {
         boolean paused = dl.isPaused();
         long dlSpeed = 0, ulSpeed = 0;
-        try { dlSpeed = dl.getStats().getDownloadAverage(); } catch (Exception ignored) {}
-        try { ulSpeed = dl.getStats().getUploadAverage();   } catch (Exception ignored) {}
+        try {
+            dlSpeed = dl.getStats().getDownloadAverage();
+        } catch (Exception ignored) {
+        }
+        try {
+            ulSpeed = dl.getStats().getUploadAverage();
+        } catch (Exception ignored) {
+        }
         boolean complete = false;
-        try { complete = dl.getStats().getCompleted() >= 1000; } catch (Exception ignored) {}
+        try {
+            complete = dl.getStats().getCompleted() >= 1000;
+        } catch (Exception ignored) {
+        }
 
         switch (dl.getState()) {
-            case Download.ST_DOWNLOADING: return paused ? "pausedDL"  : (dlSpeed > 0 ? "downloading" : "stalledDL");
-            case Download.ST_SEEDING:     return paused ? "pausedUP"  : (ulSpeed > 0 ? "uploading"   : "stalledUP");
-            case Download.ST_STOPPED:     return paused ? (complete ? "pausedUP" : "pausedDL")
-                                                        : (complete ? "stalledUP" : "stalledDL");
+            case Download.ST_DOWNLOADING:
+                return paused ? "pausedDL" : (dlSpeed > 0 ? "downloading" : "stalledDL");
+            case Download.ST_SEEDING:
+                return paused ? "pausedUP" : (ulSpeed > 0 ? "uploading" : "stalledUP");
+            case Download.ST_STOPPED:
+                return paused ? (complete ? "pausedUP" : "pausedDL")
+                        : (complete ? "stalledUP" : "stalledDL");
             case Download.ST_QUEUED:
-            case Download.ST_WAITING:     return complete ? "queuedUP" : "queuedDL";
-            case Download.ST_READY:       return complete ? "queuedUP" : "queuedDL";
-            case Download.ST_PREPARING:   return "checkingDL";
-            case Download.ST_ERROR:       return "error";
-            default:                      return "unknown";
+            case Download.ST_WAITING:
+                return complete ? "queuedUP" : "queuedDL";
+            case Download.ST_READY:
+                return complete ? "queuedUP" : "queuedDL";
+            case Download.ST_PREPARING:
+                return "checkingDL";
+            case Download.ST_ERROR:
+                return "error";
+            default:
+                return "unknown";
         }
     }
 
@@ -545,7 +636,10 @@ public final class TorrentMapper {
     }
 
     private static String urlEncode(String s) {
-        try { return java.net.URLEncoder.encode(s, "UTF-8").replace("+", "%20"); }
-        catch (Exception e) { return s; }
+        try {
+            return java.net.URLEncoder.encode(s, "UTF-8").replace("+", "%20");
+        } catch (Exception e) {
+            return s;
+        }
     }
 }

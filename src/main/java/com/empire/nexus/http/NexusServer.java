@@ -22,30 +22,37 @@ public class NexusServer {
     private final String webuiPath;
     private final PluginInterface pi;
 
-    /** Active SID tokens (UUID strings). */
+    /**
+     * Active SID tokens (UUID strings).
+     */
     private final Set<String> activeSessions = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     // Diagnostic info shown in the fallback page
     private String diagConfiguredPath = "";
-    private String diagResolvedPath   = "";
-    private String diagIndexPath      = "";
-    private boolean diagIndexExists   = false;
+    private String diagResolvedPath = "";
+    private String diagIndexPath = "";
+    private boolean diagIndexExists = false;
 
     private HttpServer server;
 
     public NexusServer(int port, boolean bypassAuth, String username, String password,
                        String mode, String webuiPath, PluginInterface pi) {
-        this.port       = port;
+        this.port = port;
         this.bypassAuth = bypassAuth;
-        this.username   = username != null ? username : "admin";
-        this.password   = password != null ? password : "";
-        this.mode       = mode     != null ? mode.trim() : "qbittorrent";
-        this.webuiPath  = webuiPath == null ? "" : webuiPath.trim();
-        this.pi         = pi;
+        this.username = username != null ? username : "admin";
+        this.password = password != null ? password : "";
+        this.mode = mode != null ? mode.trim() : "qbittorrent";
+        this.webuiPath = webuiPath == null ? "" : webuiPath.trim();
+        this.pi = pi;
     }
 
-    public String getUsername() { return username; }
-    public String getPassword() { return password; }
+    public String getUsername() {
+        return username;
+    }
+
+    public String getPassword() {
+        return password;
+    }
 
     public void start() throws Exception {
         server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
@@ -67,8 +74,8 @@ public class NexusServer {
                 // Serve under /transmission/web/
                 StaticFileHandler trStatic = new StaticFileHandler(webuiPath, "/transmission/web");
                 diagResolvedPath = trStatic.getResolvedBasePath();
-                diagIndexPath    = trStatic.getResolvedIndexPath();
-                diagIndexExists  = trStatic.isAvailable();
+                diagIndexPath = trStatic.getResolvedIndexPath();
+                diagIndexExists = trStatic.isAvailable();
                 if (diagIndexExists) {
                     server.createContext("/transmission/web", trStatic);
                 }
@@ -77,8 +84,8 @@ public class NexusServer {
                 // qbittorrent mode — serve SPA at /
                 StaticFileHandler staticHandler = new StaticFileHandler(webuiPath);
                 diagResolvedPath = staticHandler.getResolvedBasePath();
-                diagIndexPath    = staticHandler.getResolvedIndexPath();
-                diagIndexExists  = staticHandler.isAvailable();
+                diagIndexPath = staticHandler.getResolvedIndexPath();
+                diagIndexExists = staticHandler.isAvailable();
                 if (diagIndexExists) {
                     server.createContext("/", staticHandler);
                 } else {
@@ -96,15 +103,22 @@ public class NexusServer {
         if (server != null) server.stop(1);
     }
 
-    /** Returns true when the request carries a valid session (or auth is bypassed). */
+    /**
+     * Returns true when the request carries a valid session (or auth is bypassed).
+     */
     public boolean isAuthenticated(HttpExchange exchange) {
         if (bypassAuth) return true;
         String sid = HttpUtils.sidCookie(exchange);
         return sid != null && activeSessions.contains(sid);
     }
 
-    public Set<String> getActiveSessions() { return activeSessions; }
-    public boolean isBypassAuth()          { return bypassAuth; }
+    public Set<String> getActiveSessions() {
+        return activeSessions;
+    }
+
+    public boolean isBypassAuth() {
+        return bypassAuth;
+    }
 
     private void rootFallback(HttpExchange exchange) throws java.io.IOException {
         if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
@@ -132,11 +146,11 @@ public class NexusServer {
                 + "<p>The web UI could not be served. Diagnostic info:</p>"
                 + "<table>"
                 + row("nexus.webui.path (from config)", diagConfiguredPath)
-                + row("Resolved base directory",         diagResolvedPath.isEmpty() ? "(n/a)" : diagResolvedPath)
-                + row("Looking for index.html at",       diagIndexPath.isEmpty()    ? "(n/a)" : diagIndexPath)
-                + row("index.html found?",               diagIndexExists
-                        ? "<span class='ok'>YES</span>"
-                        : "<span class='bad'>NO — check the path above</span>")
+                + row("Resolved base directory", diagResolvedPath.isEmpty() ? "(n/a)" : diagResolvedPath)
+                + row("Looking for index.html at", diagIndexPath.isEmpty() ? "(n/a)" : diagIndexPath)
+                + row("index.html found?", diagIndexExists
+                ? "<span class='ok'>YES</span>"
+                : "<span class='bad'>NO — check the path above</span>")
                 + "</table>"
                 + "<h2>Common fixes</h2><ul>"
                 + "<li>Download a qBittorrent-compatible web UI release (e.g. qBittorrent-Web, cotorrent) and <strong>extract</strong> it.</li>"
@@ -148,7 +162,9 @@ public class NexusServer {
         byte[] bytes = html.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
         exchange.sendResponseHeaders(200, bytes.length);
-        try (var out = exchange.getResponseBody()) { out.write(bytes); }
+        try (var out = exchange.getResponseBody()) {
+            out.write(bytes);
+        }
     }
 
     private static String row(String label, String value) {

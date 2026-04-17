@@ -10,10 +10,13 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** Static helpers for reading requests and writing responses. */
+/**
+ * Static helpers for reading requests and writing responses.
+ */
 public final class HttpUtils {
 
-    private HttpUtils() {}
+    private HttpUtils() {
+    }
 
     // ── Response helpers ──────────────────────────────────────────────────────
 
@@ -62,28 +65,36 @@ public final class HttpUtils {
 
     // ── Request helpers ───────────────────────────────────────────────────────
 
-    /** Parse ?key=value&… query string. Returns empty map if none. */
+    /**
+     * Parse ?key=value&… query string. Returns empty map if none.
+     */
     public static Map<String, String> queryParams(HttpExchange ex) {
         String raw = ex.getRequestURI().getRawQuery();
         if (raw == null || raw.isEmpty()) return Collections.emptyMap();
         return parseKV(raw);
     }
 
-    /** Read and parse an application/x-www-form-urlencoded request body. */
+    /**
+     * Read and parse an application/x-www-form-urlencoded request body.
+     */
     public static Map<String, String> formParams(HttpExchange ex) throws IOException {
         String body = readBody(ex);
         if (body.isBlank()) return Collections.emptyMap();
         return parseKV(body);
     }
 
-    /** Read the request body as a UTF-8 string. */
+    /**
+     * Read the request body as a UTF-8 string.
+     */
     public static String readBody(HttpExchange ex) throws IOException {
         try (InputStream in = ex.getRequestBody()) {
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }
     }
 
-    /** Extract the SID cookie value, or null if absent. */
+    /**
+     * Extract the SID cookie value, or null if absent.
+     */
     public static String sidCookie(HttpExchange ex) {
         String header = ex.getRequestHeaders().getFirst("Cookie");
         if (header == null) return null;
@@ -94,7 +105,9 @@ public final class HttpUtils {
         return null;
     }
 
-    /** Last path segment: "/api/v2/torrents/info" → "info". */
+    /**
+     * Last path segment: "/api/v2/torrents/info" → "info".
+     */
     public static String pathSegment(HttpExchange ex) {
         String path = ex.getRequestURI().getPath().replaceAll("/+$", "");
         int slash = path.lastIndexOf('/');
@@ -110,7 +123,8 @@ public final class HttpUtils {
                 String k = URLDecoder.decode(pair.substring(0, eq), "UTF-8");
                 String v = URLDecoder.decode(pair.substring(eq + 1), "UTF-8");
                 map.put(k, v);
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
         return map;
     }

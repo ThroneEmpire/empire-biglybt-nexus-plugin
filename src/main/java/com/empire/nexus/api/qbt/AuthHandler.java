@@ -10,12 +10,12 @@ import java.util.UUID;
 
 /**
  * POST /api/v2/auth/login
- *   Form params: username, password
- *   Response: "Ok." + Set-Cookie: SID=<token>  |  "Fails."
- *
+ * Form params: username, password
+ * Response: "Ok." + Set-Cookie: SID=<token>  |  "Fails."
+ * <p>
  * POST /api/v2/auth/logout
- *   Response: "Ok."
- *
+ * Response: "Ok."
+ * <p>
  * Credentials are read from the plugin settings (nexus.auth.username / nexus.auth.password).
  * When nexus.auth.bypass=true every login attempt succeeds without checking credentials.
  */
@@ -29,9 +29,9 @@ public class AuthHandler {
 
     public void handle(HttpExchange exchange) throws IOException {
         switch (HttpUtils.pathSegment(exchange)) {
-            case "login"  -> login(exchange);
+            case "login" -> login(exchange);
             case "logout" -> logout(exchange);
-            default       -> HttpUtils.sendText(exchange, "Not Found", 404);
+            default -> HttpUtils.sendText(exchange, "Not Found", 404);
         }
     }
 

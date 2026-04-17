@@ -10,42 +10,42 @@ import java.util.Map;
 
 /**
  * Serves static files from a directory on disk.
- *
+ * <p>
  * Usage: point nexus.webui.path at your web UI dist/ folder, then open
  * http://localhost:8090/ — this handler serves index.html for every path that
  * doesn't match a real file (SPA history-mode routing).
- *
+ * <p>
  * Security: paths are canonicalized and checked to be inside the base dir
  * before opening, preventing path-traversal attacks.
  */
 public class StaticFileHandler implements HttpHandler {
 
     private static final Map<String, String> MIME = Map.ofEntries(
-            Map.entry("html",  "text/html; charset=utf-8"),
-            Map.entry("htm",   "text/html; charset=utf-8"),
-            Map.entry("js",    "application/javascript; charset=utf-8"),
-            Map.entry("mjs",   "application/javascript; charset=utf-8"),
-            Map.entry("css",   "text/css; charset=utf-8"),
-            Map.entry("json",  "application/json; charset=utf-8"),
-            Map.entry("svg",   "image/svg+xml"),
-            Map.entry("png",   "image/png"),
-            Map.entry("jpg",   "image/jpeg"),
-            Map.entry("jpeg",  "image/jpeg"),
-            Map.entry("gif",   "image/gif"),
-            Map.entry("webp",  "image/webp"),
-            Map.entry("ico",   "image/x-icon"),
-            Map.entry("woff",  "font/woff"),
+            Map.entry("html", "text/html; charset=utf-8"),
+            Map.entry("htm", "text/html; charset=utf-8"),
+            Map.entry("js", "application/javascript; charset=utf-8"),
+            Map.entry("mjs", "application/javascript; charset=utf-8"),
+            Map.entry("css", "text/css; charset=utf-8"),
+            Map.entry("json", "application/json; charset=utf-8"),
+            Map.entry("svg", "image/svg+xml"),
+            Map.entry("png", "image/png"),
+            Map.entry("jpg", "image/jpeg"),
+            Map.entry("jpeg", "image/jpeg"),
+            Map.entry("gif", "image/gif"),
+            Map.entry("webp", "image/webp"),
+            Map.entry("ico", "image/x-icon"),
+            Map.entry("woff", "font/woff"),
             Map.entry("woff2", "font/woff2"),
-            Map.entry("ttf",   "font/ttf"),
-            Map.entry("otf",   "font/otf"),
-            Map.entry("eot",   "application/vnd.ms-fontobject"),
-            Map.entry("txt",   "text/plain; charset=utf-8"),
-            Map.entry("xml",   "application/xml; charset=utf-8"),
-            Map.entry("map",   "application/json; charset=utf-8")
+            Map.entry("ttf", "font/ttf"),
+            Map.entry("otf", "font/otf"),
+            Map.entry("eot", "application/vnd.ms-fontobject"),
+            Map.entry("txt", "text/plain; charset=utf-8"),
+            Map.entry("xml", "application/xml; charset=utf-8"),
+            Map.entry("map", "application/json; charset=utf-8")
     );
 
-    private final File   baseDir;
-    private final File   indexFile;
+    private final File baseDir;
+    private final File indexFile;
     private final String prefix;   // URI prefix to strip before resolving, e.g. "/transmission/web"
 
     public StaticFileHandler(String path) {
@@ -53,9 +53,9 @@ public class StaticFileHandler implements HttpHandler {
     }
 
     public StaticFileHandler(String path, String prefix) {
-        this.baseDir   = new File(path).getAbsoluteFile();
+        this.baseDir = new File(path).getAbsoluteFile();
         this.indexFile = new File(baseDir, "index.html");
-        this.prefix    = prefix;
+        this.prefix = prefix;
     }
 
     public String getResolvedBasePath() {

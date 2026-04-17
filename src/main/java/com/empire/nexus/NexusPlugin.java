@@ -3,19 +3,13 @@ package com.empire.nexus;
 import com.biglybt.pif.Plugin;
 import com.biglybt.pif.PluginException;
 import com.biglybt.pif.PluginInterface;
-import com.empire.nexus.util.TorrentMapper;
 import com.biglybt.pif.logging.LoggerChannel;
-import com.biglybt.pif.ui.config.BooleanParameter;
-import com.biglybt.pif.ui.config.DirectoryParameter;
-import com.biglybt.pif.ui.config.HyperlinkParameter;
-import com.biglybt.pif.ui.config.IntParameter;
-import com.biglybt.pif.ui.config.PasswordParameter;
-import com.biglybt.pif.ui.config.StringListParameter;
-import com.biglybt.pif.ui.config.StringParameter;
+import com.biglybt.pif.ui.config.*;
 import com.biglybt.pif.ui.model.BasicPluginConfigModel;
+import com.empire.nexus.http.NexusServer;
+import com.empire.nexus.util.TorrentMapper;
 
 import java.nio.charset.StandardCharsets;
-import com.empire.nexus.http.NexusServer;
 
 /**
  * BiglyBT plugin entry point.
@@ -64,14 +58,14 @@ public class NexusPlugin implements Plugin {
                 "nexus.webui.path", "nexus.webui.path", "");
 
         // Read current values
-        int     port       = portParam.getValue();
-        boolean bypass     = bypassParam.getValue();
-        String  username   = usernameParam.getValue();
-        byte[]  pwBytes    = passwordParam.getValue();
-        String  password   = (pwBytes != null && pwBytes.length > 0)
+        int port = portParam.getValue();
+        boolean bypass = bypassParam.getValue();
+        String username = usernameParam.getValue();
+        byte[] pwBytes = passwordParam.getValue();
+        String password = (pwBytes != null && pwBytes.length > 0)
                 ? new String(pwBytes, StandardCharsets.UTF_8) : "";
-        String  mode       = modeParam.getValue();
-        String  webuiPath  = webuiParam.getValue();
+        String mode = modeParam.getValue();
+        String webuiPath = webuiParam.getValue();
 
         // Init mapper (attributes, etc.)
         TorrentMapper.init(pluginInterface);

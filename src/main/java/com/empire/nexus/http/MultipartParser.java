@@ -2,7 +2,6 @@ package com.empire.nexus.http;
 
 import com.sun.net.httpserver.HttpExchange;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -11,17 +10,18 @@ import java.util.List;
 
 /**
  * Minimal multipart/form-data parser.
- *
+ * <p>
  * Handles the subset used by qBittorrent web UI torrent upload:
- *   POST /api/v2/torrents/add
- *   Content-Type: multipart/form-data; boundary=<token>
- *
+ * POST /api/v2/torrents/add
+ * Content-Type: multipart/form-data; boundary=<token>
+ * <p>
  * Each Part has a name, an optional filename, and raw bytes.
  * Text fields are parts with no filename; file uploads have a filename.
  */
 public final class MultipartParser {
 
-    private MultipartParser() {}
+    private MultipartParser() {
+    }
 
     public static class Part {
         public final String name;
@@ -29,12 +29,14 @@ public final class MultipartParser {
         public final byte[] data;
 
         Part(String name, String filename, byte[] data) {
-            this.name     = name;
+            this.name = name;
             this.filename = filename;
-            this.data     = data;
+            this.data = data;
         }
 
-        /** Return data as UTF-8 text (for non-file fields). */
+        /**
+         * Return data as UTF-8 text (for non-file fields).
+         */
         public String text() {
             return new String(data, StandardCharsets.UTF_8);
         }
@@ -80,7 +82,7 @@ public final class MultipartParser {
     private static List<Part> splitParts(byte[] body, String boundary) {
         List<Part> parts = new ArrayList<>();
         byte[] delimiter = ("--" + boundary).getBytes(StandardCharsets.ISO_8859_1);
-        byte[] crlf      = "\r\n".getBytes(StandardCharsets.ISO_8859_1);
+        byte[] crlf = "\r\n".getBytes(StandardCharsets.ISO_8859_1);
 
         int pos = indexOf(body, delimiter, 0);
         if (pos < 0) return parts;
@@ -92,7 +94,8 @@ public final class MultipartParser {
             // "--" suffix = final boundary
             if (body[pos] == '-' && body[pos + 1] == '-') break;
             // skip CRLF after boundary
-            if (body[pos] == '\r') pos += 2; else pos += 1;
+            if (body[pos] == '\r') pos += 2;
+            else pos += 1;
 
             // Read headers until blank line (\r\n\r\n)
             byte[] headerEnd = "\r\n\r\n".getBytes(StandardCharsets.ISO_8859_1);
@@ -125,13 +128,13 @@ public final class MultipartParser {
     }
 
     private static Part parsePart(String headers, byte[] data) {
-        String name     = null;
+        String name = null;
         String filename = null;
 
         for (String line : headers.split("\r\n")) {
             String lower = line.toLowerCase();
             if (lower.startsWith("content-disposition:")) {
-                name     = headerParam(line, "name");
+                name = headerParam(line, "name");
                 filename = headerParam(line, "filename");
             }
         }
@@ -140,9 +143,11 @@ public final class MultipartParser {
         return new Part(name, filename, data);
     }
 
-    /** Extract a parameter value from a header like: form-data; name="foo"; filename="bar.torrent" */
+    /**
+     * Extract a parameter value from a header like: form-data; name="foo"; filename="bar.torrent"
+     */
     private static String headerParam(String header, String param) {
-        String lower  = header.toLowerCase();
+        String lower = header.toLowerCase();
         String search = param.toLowerCase() + "=";
         int idx = lower.indexOf(search);
         if (idx < 0) return null;
@@ -157,7 +162,9 @@ public final class MultipartParser {
         return (end < 0 ? header.substring(idx) : header.substring(idx, end)).trim();
     }
 
-    /** Returns the first index of needle in haystack starting at fromIndex, or -1. */
+    /**
+     * Returns the first index of needle in haystack starting at fromIndex, or -1.
+     */
     private static int indexOf(byte[] haystack, byte[] needle, int fromIndex) {
         outer:
         for (int i = fromIndex; i <= haystack.length - needle.length; i++) {
