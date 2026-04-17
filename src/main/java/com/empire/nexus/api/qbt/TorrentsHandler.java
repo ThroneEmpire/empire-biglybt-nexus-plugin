@@ -1,5 +1,7 @@
 package com.empire.nexus.api.qbt;
 
+import com.biglybt.core.category.Category;
+import com.biglybt.core.category.CategoryManager;
 import com.biglybt.pif.PluginInterface;
 import com.biglybt.pif.disk.DiskManagerFileInfo;
 import com.biglybt.pif.download.Download;
@@ -63,10 +65,10 @@ public class TorrentsHandler {
             case "setDownloadLimit" -> setDownloadLimit(exchange);
             case "setUploadLimit"   -> setUploadLimit(exchange);
 
-            // Category management — no actual storage needed; categories are per-torrent
+            // Category management
             case "createCategory",
-                 "editCategory",
-                 "removeCategories" -> HttpUtils.sendText(exchange, "Ok.");
+                 "editCategory" -> HttpUtils.sendText(exchange, "Ok.");
+            case "removeCategories" -> removeCategories(exchange);
 
             // Tag management — no-op stubs (tags stored per-torrent in addTags/removeTags)
             case "createTags",
@@ -435,6 +437,24 @@ public class TorrentsHandler {
             cats.add(c.getName(), obj);
         }
         HttpUtils.sendJson(exchange, cats.toString());
+    }
+
+    // GET /api/v2/torrents/removeCategories
+    private void removeCategories(HttpExchange exchange) throws IOException {
+        Map<String, String> params = HttpUtils.formParams(exchange);
+        String catsToRemoveRaw = params.get("categories");
+        if (catsToRemoveRaw == null || catsToRemoveRaw.isEmpty()) {
+            HttpUtils.sendText(exchange, "Ok.");
+            return;
+        }
+
+        Set<String> catsToRemove = new HashSet<>(Arrays.asList(catsToRemoveRaw.split("\n")));
+        for (String s : catsToRemove) {
+            Category category = CategoryManager.getCategory(s);
+            TorrentMapper.removeCategory(category);
+        }
+
+        HttpUtils.sendText(exchange, "Ok.");
     }
 
     // ── GET /api/v2/torrents/tags ─────────────────────────────────────────────

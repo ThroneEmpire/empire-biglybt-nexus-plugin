@@ -1,5 +1,9 @@
 package com.empire.nexus.util;
 
+import com.biglybt.core.category.Category;
+import com.biglybt.core.category.CategoryManager;
+import com.biglybt.core.category.impl.CategoryImpl;
+import com.biglybt.core.download.DownloadManager;
 import com.biglybt.pif.PluginInterface;
 import com.biglybt.pif.download.Download;
 import com.biglybt.pif.download.DownloadScrapeResult;
@@ -114,6 +118,21 @@ public final class TorrentMapper {
         } catch (Exception ignored) {
             return new com.biglybt.core.category.Category[0];
         }
+    }
+
+    // https://github.com/BiglySoftware/BiglyBT/blob/31285ffe0f78f68b19b8f7fb5e2c7a16276de068/uis/src/com/biglybt/ui/swt/views/utils/CategoryUIUtils.java#L143
+    //
+    // We need to remove from each torrent and then remove from the manager.
+    public static void removeCategory(Category category) {
+        CategoryImpl catImpl = (CategoryImpl) category;
+
+        // Remove from each torrent
+        for (DownloadManager taggedDownload : catImpl.getTaggedDownloads()) {
+            com.biglybt.core.download.DownloadManagerState state = taggedDownload.getDownloadState();
+            state.setCategory(null);
+        }
+
+        CategoryManager.removeCategory(catImpl);
     }
 
     /** Unwrap plugin Download to internal DownloadManagerState for deeper access. Returns null on failure. */
