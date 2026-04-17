@@ -75,3 +75,8 @@ When **Bypass Auth** is disabled:
 
 - **qBittorrent mode** — uses the SID cookie flow (same as the real qBittorrent Web UI). Log in at `/api/v2/auth/login`.
 - **Transmission mode** — uses HTTP Basic Auth with the configured username and password, plus the standard `X-Transmission-Session-Id` CSRF token handshake.
+
+## License
+
+This project is licensed under the GNU General Public License v3.0 or later (GPL-3.0-or-later).
+See the `LICENSE` file for details.
