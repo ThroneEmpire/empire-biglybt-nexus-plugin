@@ -396,7 +396,15 @@ public final class TorrentMapper {
         // ── State ────────────────────────────────────────────────────────────
         o.addProperty("state", toQbtState(dl));
         o.addProperty("force_start", dl.isForceStart());
-        o.addProperty("super_seeding", false);
+        boolean superSeeding = false;
+        try {
+            com.biglybt.core.download.DownloadManager dm2 = unwrap(dl);
+            if (dm2 != null) {
+                com.biglybt.core.peer.PEPeerManager ppm = dm2.getPeerManager();
+                if (ppm != null) superSeeding = ppm.isSuperSeedMode();
+            }
+        } catch (Exception ignored) {}
+        o.addProperty("super_seeding", superSeeding);
 
         // ── Peers / seeds (connected) ─────────────────────────────────────────
         int seeds = 0, peers = 0;

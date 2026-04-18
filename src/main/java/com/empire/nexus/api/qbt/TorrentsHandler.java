@@ -91,10 +91,11 @@ public class TorrentsHandler {
             case "createTags" -> createTags(exchange);
             case "deleteTags" -> deleteTags(exchange);
 
+            case "setSuperSeeding" -> setSuperSeeding(exchange);
+
             // Misc accepted but no-op
             case "setAutoManagement",
                  "toggleFirstLastPiecePrio",
-                 "setSuperSeeding",
                  "renameFile",
                  "renameFolder",
                  "setShareLimits" -> HttpUtils.sendText(exchange, "Ok.");
@@ -897,6 +898,25 @@ public class TorrentsHandler {
                 dl.setForceStart(value);
             } catch (Exception ignored) {
             }
+        });
+        HttpUtils.sendText(exchange, "Ok.");
+    }
+
+    // ── POST /api/v2/torrents/setSuperSeeding ────────────────────────────────
+
+    private void setSuperSeeding(HttpExchange exchange) throws IOException {
+        Map<String, String> params = HttpUtils.formParams(exchange);
+        boolean value = "true".equalsIgnoreCase(params.getOrDefault("value", "false"));
+        forEachMatchingHashes(params.getOrDefault("hashes", "all"), dl -> {
+            try {
+                com.biglybt.core.download.DownloadManager dm =
+                        (com.biglybt.core.download.DownloadManager) com.biglybt.pifimpl.local.PluginCoreUtils.unwrap(dl);
+                if (dm == null) return;
+                com.biglybt.core.peer.PEPeerManager pm = dm.getPeerManager();
+                if (pm != null && pm.canToggleSuperSeedMode() && pm.isSuperSeedMode() != value) {
+                    pm.setSuperSeedMode(value);
+                }
+            } catch (Exception ignored) {}
         });
         HttpUtils.sendText(exchange, "Ok.");
     }
