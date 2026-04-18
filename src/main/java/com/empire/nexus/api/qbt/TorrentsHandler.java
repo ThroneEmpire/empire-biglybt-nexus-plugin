@@ -36,7 +36,7 @@ public class TorrentsHandler {
             case "trackers" -> trackers(exchange);
             case "files" -> files(exchange);
             case "peers" -> peers(exchange);
-            case "pieceStates" -> HttpUtils.sendJson(exchange, "[]");
+            case "pieceStates" -> pieceStates(exchange);
             case "pieceHashes" -> pieceHashes(exchange);
             case "count" -> count(exchange);
             case "webseeds" -> webseeds(exchange);
@@ -267,25 +267,21 @@ public class TorrentsHandler {
         o.addProperty("reannounce", 0L);
         o.addProperty("has_metadata", true);
         o.addProperty("popularity", 0.0);
-        int piecesNum = 0, piecesHave = 0;
         long pieceSize = 0;
-        try {
-            piecesNum = (int) t.getPieceCount();
-        } catch (Exception ignored) {
-        }
         try {
             pieceSize = t.getPieceSize();
         } catch (Exception ignored) {
         }
-        try {
-            DiskManagerFileInfo[] pf = dl.getDiskManagerFileInfo();
-            if (pf != null) {
-                for (DiskManagerFileInfo fi : pf)
-                    piecesHave += (int) (fi.getDownloaded() / Math.max(1, pieceSize > 0 ? pieceSize : 262144));
-                piecesHave = Math.min(piecesHave, piecesNum);
-            }
-        } catch (Exception ignored) {
-        }
+        // Use getPieceStates() as the single source of truth for both piece count and
+        // done count. getPieceStates() uses the DiskManager's own piece array, which is
+        // sized via getNumberOfPieces() (calculated from size/pieceLength). That's
+        // intentionally different from getPieces().length, which can be larger for
+        // buggy torrents that have extraneous hashes in the .torrent file.
+        // https://github.com/BiglySoftware/BiglyBT/blob/14a9ff1675caf091a3b79cebbd8846336b847df9/core/src/com/biglybt/core/torrent/impl/TOTorrentImpl.java#L1312
+        int[] pieceStates = TorrentMapper.getPieceStates(dl);
+        int piecesNum = pieceStates.length;
+        int piecesHave = 0;
+        for (int s : pieceStates) if (s == 2) piecesHave++;
         o.addProperty("pieces_num", piecesNum);
         o.addProperty("pieces_have", piecesHave);
         o.addProperty("piece_size", pieceSize);
@@ -843,6 +839,20 @@ public class TorrentsHandler {
         } catch (Exception ignored) {
         }
         HttpUtils.sendText(exchange, "Ok.");
+    }
+
+    // ── GET /api/v2/torrents/pieceStates ─────────────────────────────────────
+
+    private void pieceStates(HttpExchange exchange) throws IOException {
+        Download dl = findByHash(HttpUtils.queryParams(exchange).get("hash"));
+        if (dl == null) {
+            HttpUtils.sendText(exchange, "Not Found", 404);
+            return;
+        }
+        int[] states = TorrentMapper.getPieceStates(dl);
+        JsonArray arr = new JsonArray();
+        for (int s : states) arr.add(s);
+        HttpUtils.sendJson(exchange, arr.toString());
     }
 
     // ── GET /api/v2/torrents/pieceHashes ─────────────────────────────────────

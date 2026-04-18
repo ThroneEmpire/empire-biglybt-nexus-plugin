@@ -106,6 +106,72 @@ public final class TorrentMapper {
         }
     }
 
+    /** Returns piece states as a qBittorrent int array: 0=not downloaded, 1=downloading, 2=downloaded. */
+    public static int[] getPieceStates(Download dl) {
+        com.biglybt.core.download.DownloadManager dm = unwrap(dl);
+        if (dm == null) return new int[0];
+
+        // Get DiskManagerPiece[] the same way BiglyBT's PieceMapView does:
+        // prefer getDiskManager().getPieces() (live, works while seeding too),
+        // fall back to getDiskManagerPiecesSnapshot() (available during download).
+        com.biglybt.core.disk.DiskManagerPiece[] dmPieces = null;
+        try {
+            com.biglybt.core.disk.DiskManager diskManager = dm.getDiskManager();
+            if (diskManager != null) {
+                dmPieces = diskManager.getPieces();
+            }
+        } catch (Exception ignored) {}
+        if (dmPieces == null) {
+            try {
+                dmPieces = dm.getDiskManagerPiecesSnapshot();
+            } catch (Exception ignored) {}
+        }
+
+        // Get PEPiece[] for state-1 detection: a piece is "downloading" (state 1)
+        // when there is an active PEPiece with undownloaded blocks, matching PieceMapView logic.
+        com.biglybt.core.peer.PEPiece[] pePieces = null;
+        try {
+            com.biglybt.core.peer.PEPeerManager pm = dm.getPeerManager();
+            if (pm != null) pePieces = pm.getPieces();
+        } catch (Exception ignored) {}
+
+        if (dmPieces == null) {
+            // No disk manager at all — fast-path approximate from completion percentage
+            int totalPieces = 0;
+            try {
+                byte[][] hashes = dl.getTorrent().getPieces();
+                if (hashes != null) totalPieces = hashes.length;
+            } catch (Exception ignored) {}
+            if (totalPieces <= 0) return new int[0];
+            int[] states = new int[totalPieces];
+            try {
+                int permille = dl.getStats().getCompleted();
+                if (permille >= 1000) {
+                    java.util.Arrays.fill(states, 2);
+                } else if (permille > 0) {
+                    int done = (int) ((long) totalPieces * permille / 1000);
+                    java.util.Arrays.fill(states, 0, Math.min(done, totalPieces), 2);
+                }
+            } catch (Exception ignored) {}
+            return states;
+        }
+
+        int len = dmPieces.length;
+        int[] states = new int[len];
+        for (int i = 0; i < len; i++) {
+            com.biglybt.core.disk.DiskManagerPiece p = dmPieces[i];
+            if (p == null) continue;
+            if (p.isDone()) {
+                states[i] = 2;
+            } else if (pePieces != null && i < pePieces.length
+                    && pePieces[i] != null && pePieces[i].hasUndownloadedBlock()) {
+                states[i] = 1;
+            }
+            // else: 0
+        }
+        return states;
+    }
+
     /** Creates global tags (not assigned to any download) if they don't already exist. */
     public static void createGlobalTags(java.util.Collection<String> tagNames) {
         com.biglybt.core.tag.TagType tt = manualTagType();
