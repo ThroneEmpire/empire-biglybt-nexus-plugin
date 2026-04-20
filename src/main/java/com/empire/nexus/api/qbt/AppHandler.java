@@ -93,6 +93,12 @@ public class AppHandler {
             incomingPort = cfg.getCoreIntParameter(PluginConfig.CORE_PARAM_INT_INCOMING_TCP_PORT);
         } catch (Exception ignored) {
         }
+        boolean randomPort = false;
+        try {
+            randomPort = com.biglybt.core.config.COConfigurationManager
+                    .getBooleanParameter("Listen.Port.Randomize.Enable");
+        } catch (Exception ignored) {
+        }
         int maxConnGlobal = 500;
         try {
             maxConnGlobal = cfg.getCoreIntParameter(PluginConfig.CORE_PARAM_INT_MAX_CONNECTIONS_GLOBAL);
@@ -147,7 +153,7 @@ public class AppHandler {
         o.addProperty("listen_port", incomingPort);
         o.addProperty("upnp", true);
         o.addProperty("natpmp", true);
-        o.addProperty("random_port", false);
+        o.addProperty("random_port", randomPort);
 
         o.addProperty("dl_limit", dlLimit);
         o.addProperty("up_limit", ulLimit);
@@ -339,6 +345,18 @@ public class AppHandler {
             if (prefs.has("max_connec_per_torrent")) {
                 int v = prefs.get("max_connec_per_torrent").getAsInt();
                 if (v >= 0) cfg.setCoreIntParameter(PluginConfig.CORE_PARAM_INT_MAX_CONNECTIONS_PER_TORRENT, v);
+            }
+            if (prefs.has("listen_port")) {
+                int port = prefs.get("listen_port").getAsInt();
+                if (port > 0 && port <= 65535) {
+                    cfg.setCoreIntParameter(PluginConfig.CORE_PARAM_INT_INCOMING_TCP_PORT, port);
+                    cfg.setCoreIntParameter(PluginConfig.CORE_PARAM_INT_INCOMING_UDP_PORT, port);
+                }
+            }
+            if (prefs.has("random_port")) {
+                boolean random = prefs.get("random_port").getAsBoolean();
+                com.biglybt.core.config.COConfigurationManager.setParameter(
+                        "Listen.Port.Randomize.Enable", random);
             }
         } catch (Exception ignored) {
         }
