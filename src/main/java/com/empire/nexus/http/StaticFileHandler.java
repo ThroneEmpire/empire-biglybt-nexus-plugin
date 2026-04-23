@@ -46,16 +46,10 @@ public class StaticFileHandler implements HttpHandler {
 
     private final File baseDir;
     private final File indexFile;
-    private final String prefix;   // URI prefix to strip before resolving, e.g. "/transmission/web"
 
     public StaticFileHandler(String path) {
-        this(path, "");
-    }
-
-    public StaticFileHandler(String path, String prefix) {
         this.baseDir = new File(path).getAbsoluteFile();
         this.indexFile = new File(baseDir, "index.html");
-        this.prefix = prefix;
     }
 
     public String getResolvedBasePath() {
@@ -117,9 +111,6 @@ public class StaticFileHandler implements HttpHandler {
     private File resolve(String uriPath) {
         // Strip query and fragment
         String clean = uriPath.split("\\?")[0].split("#")[0];
-        // Strip context prefix so /transmission/web/foo.js → /foo.js
-        if (!prefix.isEmpty() && clean.startsWith(prefix))
-            clean = clean.substring(prefix.length());
         if (clean.isEmpty() || clean.equals("/")) clean = "/index.html";
 
         try {

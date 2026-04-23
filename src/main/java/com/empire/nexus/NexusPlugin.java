@@ -49,11 +49,6 @@ public class NexusPlugin implements Plugin {
         PasswordParameter passwordParam = config.addPasswordParameter2(
                 "nexus.auth.password", "nexus.auth.password",
                 PasswordParameter.ET_PLAIN, "adminadmin".getBytes(StandardCharsets.UTF_8));
-        StringListParameter modeParam = config.addStringListParameter2(
-                "nexus.mode", "nexus.mode",
-                new String[]{"qbittorrent", "transmission"},
-                new String[]{"qBittorrent", "Transmission"},
-                "qbittorrent");
         DirectoryParameter webuiParam = config.addDirectoryParameter2(
                 "nexus.webui.path", "nexus.webui.path", "");
 
@@ -64,29 +59,24 @@ public class NexusPlugin implements Plugin {
         byte[] pwBytes = passwordParam.getValue();
         String password = (pwBytes != null && pwBytes.length > 0)
                 ? new String(pwBytes, StandardCharsets.UTF_8) : "";
-        String mode = modeParam.getValue();
         String webuiPath = webuiParam.getValue();
 
         // Init mapper (attributes, etc.)
         TorrentMapper.init(pluginInterface);
 
         // Start Server
-        server = new NexusServer(port, bypass, username, password, mode, webuiPath, pluginInterface);
+        server = new NexusServer(port, bypass, username, password, webuiPath, pluginInterface);
         try {
             server.start();
         } catch (Exception e) {
             throw new PluginException("Nexus: failed to start HTTP server on port " + port, e);
         }
 
-        // ── Clickable URL — points to the web UI landing page for the active mode
-        String uiUrl = "transmission".equals(mode)
-                ? "http://localhost:" + port + "/transmission/web/"
-                : "http://localhost:" + port;
+        String uiUrl = "http://localhost:" + port;
         HyperlinkParameter urlParam = config.addHyperlinkParameter2("nexus.server.url", uiUrl);
         urlParam.setHyperlink(uiUrl);
 
         log.log(null, "Nexus listening on http://localhost:" + port
-                + "  mode=" + mode
                 + "  bypass=" + bypass
                 + (bypass ? "" : "  user=" + username)
                 + (webuiPath.isEmpty() ? "" : "  webui=" + webuiPath));

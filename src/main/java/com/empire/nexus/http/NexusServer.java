@@ -2,7 +2,6 @@ package com.empire.nexus.http;
 
 import com.biglybt.pif.PluginInterface;
 import com.empire.nexus.api.qbt.QbtRouter;
-import com.empire.nexus.api.transmission.TransmissionRouter;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
@@ -18,7 +17,6 @@ public class NexusServer {
     private final boolean bypassAuth;
     private final String username;
     private final String password;
-    private final String mode;
     private final String webuiPath;
     private final PluginInterface pi;
 
@@ -36,12 +34,11 @@ public class NexusServer {
     private HttpServer server;
 
     public NexusServer(int port, boolean bypassAuth, String username, String password,
-                       String mode, String webuiPath, PluginInterface pi) {
+                       String webuiPath, PluginInterface pi) {
         this.port = port;
         this.bypassAuth = bypassAuth;
         this.username = username != null ? username : "admin";
         this.password = password != null ? password : "";
-        this.mode = mode != null ? mode.trim() : "qbittorrent";
         this.webuiPath = webuiPath == null ? "" : webuiPath.trim();
         this.pi = pi;
     }
@@ -58,39 +55,20 @@ public class NexusServer {
         server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
         server.setExecutor(Executors.newCachedThreadPool());
 
-        if ("transmission".equals(mode)) {
-            // Transmission RPC — only active in Transmission mode
-            server.createContext("/transmission/rpc", new TransmissionRouter(pi, this));
-        } else {
-            // qBittorrent WebUI API — only active in qBittorrent mode
-            server.createContext("/api/v2", new QbtRouter(pi, this));
-        }
+        server.createContext("/api/v2", new QbtRouter(pi, this));
 
         // Static file serving — mode selects where the UI is mounted
         diagConfiguredPath = webuiPath.isEmpty() ? "(empty — not configured)" : webuiPath;
 
         if (!webuiPath.isEmpty()) {
-            if ("transmission".equals(mode)) {
-                // Serve under /transmission/web/
-                StaticFileHandler trStatic = new StaticFileHandler(webuiPath, "/transmission/web");
-                diagResolvedPath = trStatic.getResolvedBasePath();
-                diagIndexPath = trStatic.getResolvedIndexPath();
-                diagIndexExists = trStatic.isAvailable();
-                if (diagIndexExists) {
-                    server.createContext("/transmission/web", trStatic);
-                }
-                server.createContext("/", this::rootFallback);
+            StaticFileHandler staticHandler = new StaticFileHandler(webuiPath);
+            diagResolvedPath = staticHandler.getResolvedBasePath();
+            diagIndexPath = staticHandler.getResolvedIndexPath();
+            diagIndexExists = staticHandler.isAvailable();
+            if (diagIndexExists) {
+                server.createContext("/", staticHandler);
             } else {
-                // qbittorrent mode — serve SPA at /
-                StaticFileHandler staticHandler = new StaticFileHandler(webuiPath);
-                diagResolvedPath = staticHandler.getResolvedBasePath();
-                diagIndexPath = staticHandler.getResolvedIndexPath();
-                diagIndexExists = staticHandler.isAvailable();
-                if (diagIndexExists) {
-                    server.createContext("/", staticHandler);
-                } else {
-                    server.createContext("/", this::rootFallback);
-                }
+                server.createContext("/", this::rootFallback);
             }
         } else {
             server.createContext("/", this::rootFallback);
@@ -123,14 +101,6 @@ public class NexusServer {
     private void rootFallback(HttpExchange exchange) throws java.io.IOException {
         if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
             HttpUtils.sendEmpty(exchange, 204);
-            return;
-        }
-
-        // Transmission mode with a working web UI: redirect root to the actual UI path
-        if ("transmission".equals(mode) && diagIndexExists) {
-            exchange.getResponseHeaders().set("Location", "/transmission/web/");
-            exchange.sendResponseHeaders(302, -1);
-            exchange.close();
             return;
         }
 
