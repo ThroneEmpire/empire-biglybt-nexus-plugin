@@ -9,7 +9,10 @@ import com.biglybt.pif.ui.model.BasicPluginConfigModel;
 import com.empire.nexus.http.NexusServer;
 import com.empire.nexus.util.TorrentMapper;
 
+import java.awt.Toolkit;
+import java.awt.datatransfer.StringSelection;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
 
 /**
  * BiglyBT plugin entry point.
@@ -17,7 +20,7 @@ import java.nio.charset.StandardCharsets;
  * Settings are exposed in BiglyBT → Tools → Options → Plugins → Nexus.
  * <p>
  * nexus.http.port    — TCP port the HTTP server listens on  (default 8090)
- * nexus.auth.bypass  — skip SID cookie check                (default true)
+ * nexus.auth.bypass  — skip SID cookie check                (default false)
  * nexus.webui.path   — path to the web UI dist/ folder       (default "")
  * <p>
  * To use a qBittorrent-compatible web UI (e.g. qBittorrent-Web, cotorrent):
@@ -27,6 +30,9 @@ import java.nio.charset.StandardCharsets;
  * the qBittorrent API from the same port.
  */
 public class NexusPlugin implements Plugin {
+
+    private static final String CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+    private static final int PASSWORD_LENGTH = 12;
 
     private NexusServer server;
 
@@ -43,22 +49,64 @@ public class NexusPlugin implements Plugin {
         IntParameter portParam = config.addIntParameter2(
                 "nexus.http.port", "nexus.http.port", 8090);
         BooleanParameter bypassParam = config.addBooleanParameter2(
-                "nexus.auth.bypass", "nexus.auth.bypass", true);
+                "nexus.auth.bypass", "nexus.auth.bypass", false);
         StringParameter usernameParam = config.addStringParameter2(
                 "nexus.auth.username", "nexus.auth.username", "admin");
         PasswordParameter passwordParam = config.addPasswordParameter2(
                 "nexus.auth.password", "nexus.auth.password",
-                PasswordParameter.ET_PLAIN, "adminadmin".getBytes(StandardCharsets.UTF_8));
+                PasswordParameter.ET_PLAIN, new byte[0]);
+
+        // Hidden flag — flips to true the moment the user saves a custom password
+        BooleanParameter passwordUserModifiedParam = config.addBooleanParameter2(
+                "nexus.auth.password.usermodified", "nexus.auth.password.usermodified", false);
+        passwordUserModifiedParam.setVisible(false);
+
         DirectoryParameter webuiParam = config.addDirectoryParameter2(
                 "nexus.webui.path", "nexus.webui.path", "");
+
+        // Auto-generate password on first install (password empty and not yet user-modified)
+        boolean userModified = passwordUserModifiedParam.getValue();
+        byte[] pwBytes = passwordParam.getValue();
+        boolean passwordEmpty = pwBytes == null || pwBytes.length == 0;
+
+        if (!userModified && passwordEmpty) {
+            String generated = generatePassword();
+            passwordParam.setValue(generated);
+            pwBytes = generated.getBytes(StandardCharsets.UTF_8);
+        }
+
+        // Show credentials hint and copy button only while password is still auto-generated
+        if (!userModified) {
+            String username = usernameParam.getValue();
+            String hint = new String(pwBytes, StandardCharsets.UTF_8);
+
+            LabelParameter credHint = config.addLabelParameter2("nexus.auth.credentials.hint");
+            credHint.setLabelText("Auto-generated credentials — Username: " + username + "  Password: " + hint);
+
+            ActionParameter copyBtn = config.addActionParameter2(
+                    "nexus.auth.copy.password.label", "nexus.auth.copy.password");
+            copyBtn.setStyle(ActionParameter.STYLE_BUTTON);
+            copyBtn.addListener(param -> {
+                try {
+                    StringSelection sel = new StringSelection(hint);
+                    Toolkit.getDefaultToolkit().getSystemClipboard().setContents(sel, sel);
+                } catch (Exception ignored) {
+                }
+            });
+        }
+
+        // When the user saves a new password, flip the flag (hides credentials hint on next restart)
+        passwordParam.addListener(param -> {
+            if (!passwordUserModifiedParam.getValue()) {
+                passwordUserModifiedParam.setValue(true);
+            }
+        });
 
         // Read current values
         int port = portParam.getValue();
         boolean bypass = bypassParam.getValue();
         String username = usernameParam.getValue();
-        byte[] pwBytes = passwordParam.getValue();
-        String password = (pwBytes != null && pwBytes.length > 0)
-                ? new String(pwBytes, StandardCharsets.UTF_8) : "";
+        String password = new String(pwBytes, StandardCharsets.UTF_8);
         String webuiPath = webuiParam.getValue();
 
         // Init mapper (attributes, etc.)
@@ -80,5 +128,14 @@ public class NexusPlugin implements Plugin {
                 + "  bypass=" + bypass
                 + (bypass ? "" : "  user=" + username)
                 + (webuiPath.isEmpty() ? "" : "  webui=" + webuiPath));
+    }
+
+    private static String generatePassword() {
+        SecureRandom rng = new SecureRandom();
+        StringBuilder sb = new StringBuilder(PASSWORD_LENGTH);
+        for (int i = 0; i < PASSWORD_LENGTH; i++) {
+            sb.append(CHARS.charAt(rng.nextInt(CHARS.length())));
+        }
+        return sb.toString();
     }
 }

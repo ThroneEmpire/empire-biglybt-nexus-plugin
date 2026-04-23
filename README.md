@@ -34,10 +34,12 @@
 | Setting | Description | Default |
 |---------|-------------|---------|
 | HTTP Port | Port the API server listens on | `8090` |
-| Bypass Auth | Disable username/password authentication | `true` |
+| Bypass Auth | Disable username/password authentication | `false` |
 | Username | Login username (when auth is enabled) | `admin` |
-| Password | Login password (when auth is enabled) | `adminadmin` |
+| Password | Login password (when auth is enabled) | *(auto-generated on first install)* |
 | Web UI folder | Path to the extracted web UI folder | *(empty)* |
+
+On first install a secure password is auto-generated and shown in the settings page alongside a **Copy Password** button. Once you save your own password the credentials hint disappears permanently.
 
 A clickable link to the web UI appears in the settings page once the server is running.
 
@@ -56,7 +58,7 @@ If the web UI folder is not configured or `index.html` is not found, visiting th
 
 ## Authentication
 
-When **Bypass Auth** is disabled, Nexus uses the SID cookie flow (same as the real qBittorrent Web UI). Log in at `/api/v2/auth/login`.
+Nexus uses the SID cookie flow (same as the real qBittorrent Web UI). Log in at `/api/v2/auth/login` with your configured username and password. Enable **Bypass Auth** to skip authentication entirely (useful for local-only setups).
 
 ## License
 
