@@ -44,7 +44,7 @@ public class AuthHandler {
                 || (server.getUsername().equals(username) && server.getPassword().equals(password));
 
         if (!ok) {
-            HttpUtils.sendText(exchange, "Fails.");
+            HttpUtils.sendText(exchange, "Fails.", 401);
             return;
         }
 

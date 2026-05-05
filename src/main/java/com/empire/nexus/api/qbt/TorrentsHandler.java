@@ -38,6 +38,7 @@ public class TorrentsHandler {
             case "peers" -> peers(exchange);
             case "pieceStates" -> pieceStates(exchange);
             case "pieceHashes" -> pieceHashes(exchange);
+            case "pieceAvailability" -> pieceAvailability(exchange);
             case "count" -> count(exchange);
             case "webseeds" -> webseeds(exchange);
             case "exportTorrent" -> exportTorrent(exchange);
@@ -93,12 +94,13 @@ public class TorrentsHandler {
 
             case "setSuperSeeding" -> setSuperSeeding(exchange);
 
+            case "setShareLimits" -> setShareLimits(exchange);
+
             // Misc accepted but no-op
             case "setAutoManagement",
                  "toggleFirstLastPiecePrio",
                  "renameFile",
-                 "renameFolder",
-                 "setShareLimits" -> HttpUtils.sendText(exchange, "Ok.");
+                 "renameFolder" -> HttpUtils.sendText(exchange, "Ok.");
 
             default -> HttpUtils.sendText(exchange, "Not Found", 404);
         }
@@ -110,22 +112,71 @@ public class TorrentsHandler {
         Map<String, String> params = HttpUtils.queryParams(exchange);
         String filter = params.getOrDefault("filter", "all");
         String hashes = params.getOrDefault("hashes", "");
+        String category = params.get("category");
+        String tag = params.get("tag");
+        String sort = params.getOrDefault("sort", "");
+        boolean reverse = "true".equalsIgnoreCase(params.getOrDefault("reverse", "false"));
         int limit = parseInt(params.getOrDefault("limit", "0"), 0);
         int offset = parseInt(params.getOrDefault("offset", "0"), 0);
 
         Download[] downloads = pi.getDownloadManager().getDownloads();
-        JsonArray arr = new JsonArray();
+        List<JsonObject> rows = new java.util.ArrayList<>();
 
-        int skipped = 0;
         for (Download dl : downloads) {
             if (!TorrentMapper.isUserDownload(dl)) continue;
             if (!matchesFilter(dl, filter, hashes)) continue;
+            if (category != null && !matchesCategory(dl, category)) continue;
+            if (tag != null && !matchesTag(dl, tag)) continue;
+            rows.add(TorrentMapper.toQbtInfo(dl));
+        }
+
+        if (!sort.isEmpty()) sortRows(rows, sort, reverse);
+
+        JsonArray arr = new JsonArray();
+        int skipped = 0;
+        for (JsonObject row : rows) {
             if (skipped++ < offset) continue;
-            arr.add(TorrentMapper.toQbtInfo(dl));
+            arr.add(row);
             if (limit > 0 && arr.size() >= limit) break;
         }
 
         HttpUtils.sendJson(exchange, arr.toString());
+    }
+
+    private boolean matchesCategory(Download dl, String category) {
+        String dlCat = "";
+        try {
+            String c = dl.getCategoryName();
+            if (c != null) dlCat = c;
+        } catch (Exception ignored) {
+        }
+        // qBit: empty string matches uncategorized torrents
+        return category.equals(dlCat);
+    }
+
+    private boolean matchesTag(Download dl, String tag) {
+        // qBit: empty string matches untagged torrents
+        var tags = TorrentMapper.getNativeTags(dl);
+        if (tag.isEmpty()) return tags.isEmpty();
+        return tags.contains(tag);
+    }
+
+    private void sortRows(List<JsonObject> rows, String field, boolean reverse) {
+        java.util.Comparator<JsonObject> cmp = (a, b) -> {
+            com.google.gson.JsonElement ea = a.get(field), eb = b.get(field);
+            if (ea == null && eb == null) return 0;
+            if (ea == null) return -1;
+            if (eb == null) return 1;
+            try {
+                if (ea.getAsJsonPrimitive().isNumber() && eb.getAsJsonPrimitive().isNumber()) {
+                    return Double.compare(ea.getAsDouble(), eb.getAsDouble());
+                }
+            } catch (Exception ignored) {
+            }
+            return ea.getAsString().compareToIgnoreCase(eb.getAsString());
+        };
+        if (reverse) cmp = cmp.reversed();
+        rows.sort(cmp);
     }
 
     private boolean matchesFilter(Download dl, String filter, String hashes) {
@@ -307,6 +358,21 @@ public class TorrentsHandler {
         }
         o.addProperty("dl_limit", dlLim > 0 ? dlLim : -1);
         o.addProperty("up_limit", ulLim > 0 ? ulLim : -1);
+
+        double maxRatioProp = -1.0;
+        if (dms != null) {
+            int srMax = dms.getIntParameter(com.biglybt.core.download.DownloadManagerState.PARAM_MAX_SHARE_RATIO);
+            if (srMax > 0) maxRatioProp = srMax / 1000.0;
+        }
+        o.addProperty("max_ratio", maxRatioProp);
+        o.addProperty("ratio_limit", maxRatioProp);
+        o.addProperty("max_seeding_time", -1);
+        o.addProperty("seeding_time_limit", -1);
+        o.addProperty("inactive_seeding_time_limit", -1);
+        o.addProperty("max_inactive_seeding_time", -1);
+        o.addProperty("share_limit_action", "Default");
+        o.addProperty("auto_tmm", false);
+
         o.addProperty("eta", stats.getETASecs() < 0 ? -1L : stats.getETASecs());
         long seedingTime = 0;
         try {
@@ -430,6 +496,21 @@ public class TorrentsHandler {
                 return;
             }
 
+            // Per-piece peer count for computing per-file availability fraction
+            int[] pieceAvail = null;
+            try {
+                com.biglybt.core.download.DownloadManager dm =
+                        (com.biglybt.core.download.DownloadManager)
+                                com.biglybt.pifimpl.local.PluginCoreUtils.unwrap(dl);
+                if (dm != null) {
+                    com.biglybt.core.peer.PEPeerManager ppm = dm.getPeerManager();
+                    if (ppm != null) pieceAvail = ppm.getAvailability();
+                }
+            } catch (Exception ignored) {
+            }
+
+            boolean torrentFinished = dl.getStats().getCompleted() >= 1000;
+
             for (int i = 0; i < diskFiles.length; i++) {
                 DiskManagerFileInfo f = diskFiles[i];
                 long len = f.getLength();
@@ -453,18 +534,34 @@ public class TorrentsHandler {
                 // qBittorrent priority: 0=skip, 1=normal, 6=high, 7=max
                 int priority = f.isSkipped() ? 0 : f.getNumericPriority() > 1 ? 6 : 1;
 
+                int firstPiece = f.getFirstPieceNumber();
+                int numPieces = f.getNumPieces();
+
+                // qBit per-file availability = fraction of file's pieces that are
+                // either owned locally or seen on at least one connected peer.
+                double availability = progress;
+                if (pieceAvail != null && numPieces > 0) {
+                    int reachable = 0;
+                    int end = Math.min(firstPiece + numPieces, pieceAvail.length);
+                    for (int p = firstPiece; p < end; p++) {
+                        if (pieceAvail[p] > 0) reachable++;
+                    }
+                    availability = (double) reachable / numPieces;
+                }
+
                 JsonObject fo = new JsonObject();
                 fo.addProperty("index", i);
                 fo.addProperty("name", name);
                 fo.addProperty("size", len);
                 fo.addProperty("progress", progress);
                 fo.addProperty("priority", priority);
-                fo.addProperty("is_seed", dl.getStats().getCompleted() >= 1000);
-                fo.addProperty("availability", progress >= 1.0 ? 1.0 : progress);
+                fo.addProperty("availability", availability);
                 JsonArray pr = new JsonArray();
-                pr.add(f.getFirstPieceNumber());
-                pr.add(f.getFirstPieceNumber() + f.getNumPieces() - 1);
+                pr.add(firstPiece);
+                pr.add(firstPiece + numPieces - 1);
                 fo.add("piece_range", pr);
+                // qBit: is_seed is only set on file index 0, value = whole-torrent finished
+                if (i == 0) fo.addProperty("is_seed", torrentFinished);
                 arr.add(fo);
             }
         } catch (Exception ignored) {
@@ -584,6 +681,42 @@ public class TorrentsHandler {
         }
         forEachMatchingHashes(params.getOrDefault("hashes", ""),
                 dl -> TorrentMapper.removeTagsFromDownload(dl, toRemove));
+        HttpUtils.sendText(exchange, "Ok.");
+    }
+
+    // ── POST /api/v2/torrents/setShareLimits ──────────────────────────────────
+    //
+    // qBit accepts: hashes, ratioLimit (float), seedingTimeLimit (minutes),
+    // inactiveSeedingTimeLimit (minutes), shareLimitAction (string).
+    //
+    // BiglyBT only supports a per-torrent max share ratio. The seeding-time
+    // limits and share-limit-action are accepted but silently dropped.
+    private void setShareLimits(HttpExchange exchange) throws IOException {
+        Map<String, String> params = HttpUtils.formParams(exchange);
+        String hashes = params.getOrDefault("hashes", "");
+        String ratioStr = params.getOrDefault("ratioLimit", "").trim();
+
+        Float ratioLimit = null;
+        if (!ratioStr.isEmpty()) {
+            try {
+                ratioLimit = Float.parseFloat(ratioStr);
+            } catch (NumberFormatException ignored) {
+            }
+        }
+
+        Float finalRatio = ratioLimit;
+        forEachMatchingHashes(hashes, dl -> {
+            if (finalRatio == null) return;
+            com.biglybt.core.download.DownloadManagerState dms = TorrentMapper.getDownloadState(dl);
+            if (dms == null) return;
+            // qBit: -1 = no limit, -2 = use global default. BiglyBT: 0 = unlimited.
+            int srMax = (finalRatio < 0) ? 0 : Math.round(finalRatio * 1000f);
+            try {
+                dms.setIntParameter(
+                        com.biglybt.core.download.DownloadManagerState.PARAM_MAX_SHARE_RATIO, srMax);
+            } catch (Exception ignored) {
+            }
+        });
         HttpUtils.sendText(exchange, "Ok.");
     }
 
@@ -853,6 +986,35 @@ public class TorrentsHandler {
         int[] states = TorrentMapper.getPieceStates(dl);
         JsonArray arr = new JsonArray();
         for (int s : states) arr.add(s);
+        HttpUtils.sendJson(exchange, arr.toString());
+    }
+
+    // ── GET /api/v2/torrents/pieceAvailability ───────────────────────────────
+    //
+    // Array of ints — number of connected peers that have each piece.
+    // Pieces we already own count once for ourselves.
+    private void pieceAvailability(HttpExchange exchange) throws IOException {
+        Download dl = findByHash(HttpUtils.queryParams(exchange).get("hash"));
+        if (dl == null) {
+            HttpUtils.sendJson(exchange, "[]");
+            return;
+        }
+        JsonArray arr = new JsonArray();
+        try {
+            com.biglybt.core.download.DownloadManager dm =
+                    (com.biglybt.core.download.DownloadManager)
+                            com.biglybt.pifimpl.local.PluginCoreUtils.unwrap(dl);
+            if (dm != null) {
+                com.biglybt.core.peer.PEPeerManager ppm = dm.getPeerManager();
+                if (ppm != null) {
+                    int[] avail = ppm.getAvailability();
+                    if (avail != null) {
+                        for (int a : avail) arr.add(a);
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
         HttpUtils.sendJson(exchange, arr.toString());
     }
 

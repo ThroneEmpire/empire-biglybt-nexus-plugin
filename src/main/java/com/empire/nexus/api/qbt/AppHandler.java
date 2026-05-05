@@ -19,8 +19,8 @@ import java.util.Map;
  */
 public class AppHandler {
 
-    private static final String QBT_VERSION = "5.0.0";
-    private static final String API_VERSION = "2.11.0";
+    private static final String QBT_VERSION = "5.2.0";
+    private static final String API_VERSION = "2.15.1";
 
     private final PluginInterface pi;
     private final NexusServer server;

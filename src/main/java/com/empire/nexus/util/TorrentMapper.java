@@ -468,21 +468,24 @@ public final class TorrentMapper {
             if (sp != null) savePath = sp;
         } catch (Exception ignored) {
         }
+        boolean multiFile = false;
         try {
             var diskFiles = dl.getDiskManagerFileInfo();
             if (diskFiles != null && diskFiles.length > 0) {
+                multiFile = diskFiles.length > 1;
                 var firstFile = diskFiles[0].getFile(false);
                 if (firstFile != null) {
-                    contentPath = (diskFiles.length == 1)
-                            ? firstFile.getAbsolutePath()
-                            : firstFile.getParentFile().getAbsolutePath();
+                    contentPath = multiFile
+                            ? firstFile.getParentFile().getAbsolutePath()
+                            : firstFile.getAbsolutePath();
                 }
             }
         } catch (Exception ignored) {
         }
         o.addProperty("save_path", savePath);
         o.addProperty("content_path", contentPath);
-        o.addProperty("root_path", contentPath);
+        // root_path is the torrent's top-level folder (multi-file only); empty for single-file torrents
+        o.addProperty("root_path", multiFile ? contentPath : "");
         o.addProperty("download_path", savePath);
 
         // ── Category ─────────────────────────────────────────────────────────
@@ -533,19 +536,41 @@ public final class TorrentMapper {
         }
         o.addProperty("dl_limit", dlLimit > 0 ? dlLimit : -1);
         o.addProperty("up_limit", ulLimit > 0 ? ulLimit : -1);
-        o.addProperty("max_ratio", -1.0);
+
+        // BiglyBT stores share-ratio limits in thousandths (1000 = ratio 1.0); 0 = unlimited
+        double maxRatio = -1.0;
+        if (dms != null) {
+            int srMax = dms.getIntParameter(com.biglybt.core.download.DownloadManagerState.PARAM_MAX_SHARE_RATIO);
+            if (srMax > 0) maxRatio = srMax / 1000.0;
+        }
+        o.addProperty("max_ratio", maxRatio);
+        o.addProperty("ratio_limit", maxRatio);
+        // BiglyBT has no per-torrent seeding-time limit; report unlimited
         o.addProperty("max_seeding_time", -1);
-        o.addProperty("ratio_limit", -1.0);
         o.addProperty("seeding_time_limit", -1);
         o.addProperty("inactive_seeding_time_limit", -1);
         o.addProperty("max_inactive_seeding_time", -1);
+        // qBit serializes ShareLimitAction as enum-name string
+        // (Default | Stop | Remove | RemoveWithContent | EnableSuperSeeding)
+        o.addProperty("share_limit_action", "Default");
+
+        // ── Connections ───────────────────────────────────────────────────────
+        o.addProperty("connections_count", seeds + peers);
+        o.addProperty("connections_limit", -1);
 
         // ── Queue / misc flags ────────────────────────────────────────────────
         o.addProperty("priority", dl.getPosition());
         o.addProperty("seq_dl", dl.getFlag(Download.FLAG_SEQUENTIAL_DOWNLOAD));
         o.addProperty("f_l_piece_prio", false);
         o.addProperty("auto_tmm", false);
-        o.addProperty("availability", progress);
+
+        float availability = progress;
+        try {
+            float a = stats.getAvailability();
+            if (a >= 0) availability = a;
+        } catch (Exception ignored) {
+        }
+        o.addProperty("availability", availability);
         o.addProperty("popularity", 0.0);
 
         return o;
